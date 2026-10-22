@@ -6,3 +6,6 @@ dist/
 *.tsbuildinfo
 .playwright-mcp/
 *-preview.png
+
+.next/
+out/

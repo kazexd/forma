@@ -1,3 +1,5 @@
+'use client';
+
 import {useEffect,useRef,useState} from 'react';
 import type {User} from '@supabase/supabase-js';
 import {supabase,authConfigured} from './auth';
@@ -11,7 +13,7 @@ export function useAuth(){
  const timer=useRef<ReturnType<typeof setInterval>|null>(null);
  function stopWatching(){if(timer.current){clearInterval(timer.current);timer.current=null;}}
  useEffect(()=>{
-  if(!supabase)return;
+  if(!supabase){setLoading(false);return;}
   let mounted=true;
   const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,session)=>{
    if(!mounted)return;
@@ -54,8 +56,8 @@ export function useAuth(){
 
 export function AuthCallback(){
  const auth=useAuth();
- const params=new URLSearchParams(window.location.search);
- const callbackError=params.has('error')||params.has('error_description');
+ const [callbackError,setCallbackError]=useState(false);
+ useEffect(()=>{const params=new URLSearchParams(window.location.search);setCallbackError(params.has('error')||params.has('error_description'));},[]);
  useEffect(()=>{if(!auth.loading&&auth.user&&window.opener)window.close();},[auth.loading,auth.user]);
  return <main className="auth-callback"><a className="brand" href="/">forma.</a><h1>{auth.user?'You’re signed in.':'Connecting your account.'}</h1><p role={callbackError||auth.error?'alert':'status'}>{callbackError?'Google sign-in was cancelled or declined. Close this window and try again.':auth.error??(!auth.configured?'Supabase sign-in is not configured yet.':auth.user?'You can close this window and return to your photos.':auth.loading?'Finishing Google sign-in…':'Sign-in could not be completed. Close this window and try again.')}</p>{auth.user&&<a className="primary" href="/">Continue to Forma</a>}</main>;
 }

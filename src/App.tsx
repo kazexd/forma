@@ -1,3 +1,5 @@
+'use client';
+
 import {useAuth} from './useAuth';
 import {useEffect,useRef,useState} from 'react';
 import {ArrowRight,ArrowLeft,Upload,Plus,X,Check,ShieldCheck,Sparkles,Download,LoaderCircle,Expand,Camera} from 'lucide-react';
