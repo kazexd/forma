@@ -1,3 +1,4 @@
+import {getAccessToken} from './auth';
 export type Style = 'formal' | 'casual' | 'natural';
 export const styles: { id: Style; title: string; description: string; tag: string }[] = [
  {id:'formal',title:'Business Formal',description:'Sharp tailoring. A confident presence.',tag:'THE CLASSIC'},
@@ -17,6 +18,7 @@ export function decodeImage(url:string):Promise<void> {
 export async function generatePhotos(files:File[],style:Style):Promise<GeneratedPhoto[]> {
  if(!canContinue(files.length)) throw new Error('Please select exactly 5 photos.');
  if(files.some(file=>fileError(file))) throw new Error('Please remove invalid photos.');
+ const token=await getAccessToken();
  const data=new FormData();
  files.forEach(file=>data.append('photos',file));
  data.append('style',style);
@@ -24,7 +26,7 @@ export async function generatePhotos(files:File[],style:Style):Promise<Generated
  const abort=new AbortController();
  const timeout=setTimeout(()=>abort.abort(),210_000);
  try{
-  const response=await fetch('/api/generate',{method:'POST',body:data,signal:abort.signal});
+  const response=await fetch('/api/generate',{method:'POST',headers:{Authorization:`Bearer ${token}`},body:data,signal:abort.signal});
   const payload=await response.json().catch(()=>null);
   if(!response.ok)throw new Error(payload?.error||'Generation failed. Please try again.');
   if(!Array.isArray(payload?.photos)||payload.photos.length!==1||typeof payload.photos[0]?.previewUrl!=='string'||!payload.photos[0].previewUrl.startsWith('data:image/jpeg;base64,'))throw new Error('The server returned an invalid portrait.');

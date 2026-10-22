@@ -1,6 +1,10 @@
 import {render,screen,fireEvent,waitFor} from '@testing-library/react';
-import {describe,it,expect,vi,afterEach} from 'vitest';
+import {describe,it,expect,vi,afterEach,beforeEach} from 'vitest';
 import App from './App';
+import {useAuth} from './useAuth';
+vi.mock('./useAuth',()=>({useAuth:vi.fn()}));
+const authenticated=()=>({user:{id:'user-1',email:'user@example.com'},loading:false,signingIn:false,error:null,configured:true,signIn:vi.fn(),signOut:vi.fn().mockResolvedValue(true)});
+beforeEach(()=>{vi.mocked(useAuth).mockReturnValue(authenticated() as unknown as ReturnType<typeof useAuth>);});
 import * as api from './photos';
 const files=(n:number)=>Array.from({length:n},(_,i)=>new File(['photo'],`photo-${i}.jpg`,{type:'image/jpeg'}));
 async function upload(n:number){fireEvent.change(document.querySelector('input')!,{target:{files:files(n)}});await waitFor(()=>expect(screen.getAllByRole('button',{name:/Remove photo/})).toHaveLength(Math.min(n,5)));}
@@ -12,3 +16,9 @@ describe('core workflow',()=>{
  it('clears the session on start over',async()=>{vi.spyOn(api,'decodeImage').mockResolvedValue();vi.spyOn(api,'generatePhotos').mockResolvedValue([]);render(<App/>);await upload(5);fireEvent.click(screen.getByRole('button',{name:/Choose your style/}));fireEvent.click(screen.getByRole('checkbox'));fireEvent.click(screen.getByRole('button',{name:/Generate portrait/}));await screen.findByRole('button',{name:/Start over/});fireEvent.click(screen.getByRole('button',{name:/Start over/}));expect(screen.queryAllByRole('button',{name:/Remove photo/})).toHaveLength(0);expect(screen.getByRole('button',{name:/Choose your style/})).toBeDisabled();expect(URL.revokeObjectURL).toHaveBeenCalled();});
 });
 
+
+describe('account controls',()=>{
+ it('lets visitors select photos and styles but prevents generation before sign-in',async()=>{const auth={...authenticated(),user:null};vi.mocked(useAuth).mockReturnValue(auth as unknown as ReturnType<typeof useAuth>);vi.spyOn(api,'decodeImage').mockResolvedValue();const generate=vi.spyOn(api,'generatePhotos');render(<App/>);await upload(5);fireEvent.click(screen.getByRole('button',{name:/Choose your style/}));fireEvent.click(screen.getByRole('checkbox'));expect(screen.getByRole('button',{name:'Generate portrait'})).toBeDisabled();fireEvent.click(screen.getByRole('button',{name:'Continue with Google'}));expect(auth.signIn).toHaveBeenCalledTimes(1);expect(generate).not.toHaveBeenCalled();fireEvent.click(screen.getByRole('button',{name:'Back to photos'}));expect(screen.getAllByRole('button',{name:/Remove photo/})).toHaveLength(5);});
+ it('shows setup guidance and sign-in errors without blocking upload',()=>{vi.mocked(useAuth).mockReturnValue({...authenticated(),user:null,configured:false,error:'Sign-in is not configured yet.'} as unknown as ReturnType<typeof useAuth>);render(<App/>);expect(screen.getByRole('alert')).toHaveTextContent('not configured');expect(screen.getByRole('status')).toHaveTextContent('Supabase setup');expect(screen.getByRole('button',{name:/Drop your photos here/})).toBeEnabled();});
+ it('clears selected photos on sign-out',async()=>{vi.spyOn(api,'decodeImage').mockResolvedValue();const auth=authenticated();vi.mocked(useAuth).mockReturnValue(auth as unknown as ReturnType<typeof useAuth>);render(<App/>);await upload(5);fireEvent.click(screen.getByRole('button',{name:'Sign out'}));await waitFor(()=>expect(screen.queryAllByRole('button',{name:/Remove photo/})).toHaveLength(0));expect(auth.signOut).toHaveBeenCalledTimes(1);});
+});

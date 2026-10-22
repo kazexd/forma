@@ -3,6 +3,7 @@ import multer from 'multer';
 import sharp from 'sharp';
 import OpenAI, {toFile} from 'openai';
 import {randomUUID} from 'node:crypto';
+import {createClient} from '@supabase/supabase-js';
 
 const looks = {
   formal: 'Tailored dark business suit with a simple neutral shirt, understated gray studio backdrop, elegant studio lighting.',
@@ -10,8 +11,13 @@ const looks = {
   natural: 'Simple professional clothing, soft window light and a softly blurred natural background, approachable and relaxed.'
 };
 const mimeFormats = {'image/jpeg':'jpeg','image/png':'png','image/webp':'webp'};
-export function createApp({apiKey=process.env.OPENAI_API_KEY,model=process.env.OPENAI_IMAGE_MODEL||'gpt-image-2',client}={}) {
+export function createApp({apiKey=process.env.OPENAI_API_KEY,model=process.env.OPENAI_IMAGE_MODEL||'gpt-image-2',client,
+  supabaseUrl=process.env.VITE_SUPABASE_URL, supabaseKey=process.env.VITE_SUPABASE_PUBLISHABLE_KEY, authClient}={}) {
   const app=express();
+  let auth=authClient;
+  if(!auth&&supabaseUrl&&supabaseKey){
+    try{auth=createClient(supabaseUrl,supabaseKey,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},global:{fetch:(url,options)=>fetch(url,{...options,signal:AbortSignal.timeout(10000)})}});}catch{/* Fail closed on invalid configuration. */}
+  }
   let active=false;
   const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:10*1024*1024,files:5,fields:2,fieldSize:100,parts:7},fileFilter(_req,file,done){
     if(!Object.hasOwn(mimeFormats,file.mimetype))return done(new Error('Choose JPEG, PNG or WebP images.'));
@@ -26,7 +32,7 @@ export function createApp({apiKey=process.env.OPENAI_API_KEY,model=process.env.O
     if(req.get('sec-fetch-site')==='cross-site')return res.status(403).json({error:'Cross-site requests are not allowed.'});
     next();
   });
-  app.get('/api/health',(_req,res)=>res.json({configured:Boolean(apiKey||client)}));
+  app.get('/api/health',(_req,res)=>res.json({configured:Boolean(apiKey||client),authConfigured:Boolean(auth)}));
   app.post('/api/generate',(req,res,next)=>{
     upload(req,res,error=>{
       if(error)return next(error);
@@ -35,6 +41,20 @@ export function createApp({apiKey=process.env.OPENAI_API_KEY,model=process.env.O
   },async(req,res)=>{
     // Consume the bounded multipart body before responding; early responses can
     // reset Vite's proxy connection while it is still forwarding image bytes.
+    if(!auth)return res.status(503).json({error:'Google sign-in is not configured. Set the Supabase environment variables and restart the app.'});
+    const match=/^Bearer ([^\s]+)$/i.exec(req.get('authorization')??'');
+    if(!match)return res.status(401).json({error:'Please sign in with Google before generating a portrait.'});
+    try{
+      // Validate with Supabase Auth, never trust a browser-supplied user ID or decoded JWT alone.
+      const {data,error}=await auth.auth.getUser(match[1]);
+      if(error){
+        if(error.status>=500||!error.status)return res.status(503).json({error:'Sign-in verification is temporarily unavailable. Please try again.'});
+        return res.status(401).json({error:'Your sign-in has expired or is invalid. Please sign in again.'});
+      }
+      if(!data?.user?.id)return res.status(401).json({error:'Your sign-in has expired or is invalid. Please sign in again.'});
+      if(data.user.is_anonymous)return res.status(401).json({error:'Please sign in with Google before generating a portrait.'});
+      req.user=data.user;
+    }catch{return res.status(503).json({error:'Sign-in verification is temporarily unavailable. Please try again.'});}
     if(!apiKey&&!client)return res.status(503).json({error:'OpenAI is not configured. Set OPENAI_API_KEY in .env and restart the app.'});
     if(active)return res.status(429).json({error:'A portrait is already being generated. Please wait before trying again.'});
     active=true;
