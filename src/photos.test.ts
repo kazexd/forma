@@ -32,3 +32,6 @@ describe('share original authentication',()=>{
 
 it('accepts a purchased original from the authenticated status endpoint',async()=>{const {loadPortrait}=await import('./photos');const photo={id:'paid',paid:true,watermarked:false,previewUrl:'data:image/jpeg;base64,original'};vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:true,json:async()=>({photo})}));expect(await loadPortrait('paid')).toEqual(photo);});
 it('rejects unwatermarked images for unpaid portraits',async()=>{const {loadPortrait}=await import('./photos');vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:true,json:async()=>({photo:{paid:false,watermarked:false,previewUrl:'data:image/jpeg;base64,original'}})}));await expect(loadPortrait('unpaid')).rejects.toThrow('Invalid portrait');});
+
+
+it('loads the authenticated no-cache generation allowance',async()=>{const {getGenerationAllowance}=await import('./photos');const fetch=vi.fn().mockResolvedValue({ok:true,json:async()=>({remaining:0,limit:3})});vi.stubGlobal('fetch',fetch);expect(await getGenerationAllowance()).toEqual({remaining:0,limit:3});expect(fetch).toHaveBeenCalledWith('/api/generation-allowance',expect.objectContaining({cache:'no-store',headers:{Authorization:'Bearer test-access-token'}}));});

@@ -84,9 +84,9 @@ Illustrative style photos are local stock assets, not generated results or endor
 
 ### Required setup before generating
 
-1. In Supabase SQL Editor, run supabase/migrations/20261030_paid_portraits.sql ONCE. It creates server-only portrait/payment records, atomic daily attempt reservations, and a private forma-portraits bucket. RLS and grants deny browser access to records and objects, including originals. Do not add permissive client policies for this bucket or make it public.
+1. In Supabase SQL Editor, run supabase/migrations/20261030_paid_portraits.sql ONCE. It creates server-only portrait/payment records, historical daily attempt reservations, and a private forma-portraits bucket. RLS and grants deny browser access to records and objects, including originals. Do not add permissive client policies for this bucket or make it public.
 2. Put your Supabase service_role key (or server secret key) in SUPABASE_SERVICE_ROLE_KEY in your local .env. It is used only by backend modules. Never prefix it with NEXT_PUBLIC_ or put it in the browser. The existing public Supabase URL/key remain unchanged.
-3. Choose a per-user DAILY_GENERATION_LIMIT (default 3 attempts per UTC day) and UNPAID_RETENTION_DAYS (default 7). Reservations occur after valid photo processing but before an OpenAI call, so unsuccessful upstream attempts also count. This conservative accounting avoids accidentally treating possibly billed attempts as free.
+3. Apply the purchase-reset migration described below. Generation allowance is fixed at 3 until the next verified purchase. Apply the personal-gallery migration below; paid and unpaid portraits no longer expire. Reservations occur after valid photo processing but before an OpenAI call, so unsuccessful upstream attempts also count. This conservative accounting avoids accidentally treating possibly billed attempts as free.
 4. Restart npm run dev. Storage is checked BEFORE generation; missing schema, missing service key or a public bucket blocks generation before an OpenAI call. The live configuration was not provisioned automatically.
 
 ### Stripe sandbox/test setup
@@ -107,17 +107,19 @@ Official payment guidance: https://docs.stripe.com/checkout/fulfillment.md?ui=fu
 
 ### Storage, purchase and download behavior
 
-The original stays in private Storage. Sharp produces a separate JPEG preview fitting 600 × 900, with repeated vector-letter FORMA PREVIEW marks rendered into its pixels. No CSS-only watermark or original signed URL is sent before payment. Preview/download endpoints validate the owner on every request. Even purchased preview screens keep showing the marked preview; Download original fetches clean bytes through an authenticated, no-store attachment endpoint. The original was generated once; buying it does not regenerate it.
+The original stays in private Storage. Sharp produces a separate JPEG preview fitting 600 × 900, with repeated vector-letter FORMA PREVIEW marks rendered into its pixels. No CSS-only watermark or original signed URL is sent before payment. Preview/download endpoints validate the owner on every request. Purchased screens show the clean original; Download original fetches clean bytes through an authenticated, no-store attachment endpoint. The original was generated once; buying it does not regenerate it.
 
 GET /api/portraits/:id returns the owner's watermarked preview before purchase and the watermark-free original after verified payment, along with payment status. POST /api/portraits/:id/checkout creates or reuses a server-priced, idempotent test Checkout Session. GET /api/portraits/:id/download returns 402 before purchase and original bytes only after payment. POST /api/stripe/webhook verifies the raw signature and handles duplicate deliveries safely. No endpoint lets the browser set paid=true.
 
-Unpaid portraits expire after the configured retention period. Expired previews cannot be purchased (checkout reservations also stop within one hour of expiry). Physical deletion requires running the cleanup command below; it is NOT automatically scheduled by this repository. Purchased portraits are retained, so monitor Supabase storage/egress and define a longer-term customer retention policy before production.
+Both paid and unpaid portraits remain saved privately until their owner explicitly deletes them. There is no expiry-based deletion. Monitor Supabase storage and egress as collections grow.
+
+The cleanup command only resumes owner-confirmed deletions already marked `deleting`; it never selects portraits by age:
 
 ~~~sh
-node --env-file-if-exists=.env scripts/cleanup-portraits.mjs
+npm run cleanup:portraits
 ~~~
 
-Arrange a daily run on your eventual hosting platform. Cleanup checks associated Stripe sessions before deleting expired unpaid images so a delayed payment webhook does not destroy a paid original. Unresolved checkout reservations or processing payments are skipped for manual reconciliation. If a session was created but its ID was not saved due to a database outage, recover it using its portrait/checkout_key metadata in Stripe before clearing the reservation. Retain the original during that recovery. Failed storage uploads attempt compensating object deletion; inspect storage for orphaned objects after infrastructure failures.
+If a checkout reservation has no saved Stripe session ID, deletion is blocked for manual recovery. Locate its session using the portrait/checkout metadata in Stripe before clearing anything. Failed image uploads attempt compensating deletion; inspect storage for orphaned objects after infrastructure failures.
 
 The new storage and checkout integration is tested with injected service clients and synthetic signed events. A real Supabase migration, Stripe test price, signing secret and full sandbox round trip must be completed before the feature is ready for end users. Refund/dispute handling and live payment activation are outside this test-only release. OpenAI costs occur before the customer decides to purchase, and watermark removal cannot be made impossible.
 
@@ -132,3 +134,25 @@ For desktop/unsupported browsers, Download photo saves the purchased JPEG. Open 
 No social account connection, posting API permissions, new public photo endpoint, database migration or additional Stripe/OpenAI call is required for sharing. Actual share targets depend on the device; native sharing requires browser support and a secure context (local development on loopback is treated specially by browsers). Capability is checked using navigator.canShare({files}).
 
 Web Share behavior reference: https://developer.mozilla.org/en-US/docs/Web/API/Navigator/share .
+
+
+### Purchase-reset generation allowance
+
+Stop the app (including generation, payment status polling, webhooks and cleanup workers) during this upgrade. Run `supabase/migrations/20261031_purchase_generation_allowance.sql` once after the original paid-portrait migration, deploy the matching code, then restart the app and webhook forwarding. Do not run old application instances against the new schema. Stripe retries webhook deliveries that fail during downtime.
+
+Every account starts with 3 attempts under this new system, including existing accounts. Historical attempts and paid portraits are not replayed. There is no daily reset or configurable daily limit; remove the obsolete `DAILY_GENERATION_LIMIT` from your local environment. Each validated attempt consumes one slot immediately before OpenAI, even if generation, saving, timeout or cancellation subsequently fails. Input/authentication/configuration failures do not consume slots. A first verified purchase of each unpaid portrait resets the balance to 3 (not +3). Payment recording and the reset are atomic; repeated webhooks and refreshes cannot grant another reset. Concurrent payments and generations serialize on the same account row. Old daily usage records remain for history.
+
+`GET /api/generation-allowance` requires the signed-in user's bearer token and returns `{remaining, limit: 3}` without caching. Exhausted generation requests return HTTP 429 with `code: "generation_allowance_exhausted"`. Existing portraits can still be purchased and paid originals downloaded. If all attempts fail or the user deletes every unpaid preview, the account remains at zero; there is no independent credit purchase or free refill feature. Refunds/disputes are outside this version.
+
+
+## My Gallery and permanent storage
+
+Visit `/gallery` or use **My Gallery** in the header. Sign-in is required. The gallery shows your own portraits only, newest first, 12 at a time with All / Unpaid / Purchased filters and Load more. Thumbnails are fetched with bearer authentication and held in temporary Blob URLs that are revoked on unmount. Unpaid thumbnails and details use the embedded watermarked preview; paid ones use the original. Open a card to purchase, refresh payment status, download or share a purchased original. Checkout returns to the existing result page, with a View my gallery link. Start over never deletes stored portraits.
+
+**Upgrade:** stop old app instances, webhook handlers, and especially all old expiry cleanup jobs. Apply `supabase/migrations/20261031_personal_gallery.sql` once, after both earlier migrations. Deploy/restart the matching app and webhook forwarding. This makes `expires_at` nullable, clears existing expiry dates, and replaces checkout reservation expiry restrictions. Existing rows marked deleting by old expiry cleanup are restored to unpaid/paid if still present; images already physically deleted cannot be recovered. Remove the obsolete `UNPAID_RETENTION_DAYS` variable. Never run the old cleanup executable against the upgraded schema.
+
+`GET /api/portraits?status=all|unpaid|purchased&cursor=...` returns sanitized metadata and an opaque next cursor, never storage paths. `GET /api/portraits/:id/thumbnail` returns a private resized JPEG (maximum 480 × 640). All list/detail/image responses are no-store. Storage remains private; there are no public image URLs.
+
+`DELETE /api/portraits/:id` requires bearer authentication, same-origin verification, and `{confirm:true,paid:boolean}` matching the state shown in the confirmation. Both original and preview are permanently deleted. Purchased deletion warns users to download first; it does not refund payment or change generation allowance. An open unpaid Stripe session is expired first. Pending payments/unresolved reservations block deletion. A newly discovered paid session is fulfilled and requires a fresh purchased-image confirmation. Snapshot comparisons in Postgres prevent a concurrent checkout or payment from being overwritten. Storage failures leave a hidden `deleting` row for safe retry or the cleanup command. Repeated deletion of an already absent portrait succeeds without revealing other users' records.
+
+For isolated database checks, start a disposable Postgres container with `POSTGRES_DB=forma_test`, then run `python scripts/test-allowance-db.py <container-name>`. The checks include allowance transactions and gallery migration/deletion races. This script creates test schemas and must never target an existing application database.

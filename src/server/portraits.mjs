@@ -16,7 +16,7 @@ const json=(body,status=200)=>Response.json(body,{status,headers:{'Cache-Control
 const fail=(message,status)=>json({error:message},status);
 export function createHandlers({apiKey=process.env.OPENAI_API_KEY,model=process.env.OPENAI_IMAGE_MODEL||'gpt-image-2',client,
  supabaseUrl=process.env.NEXT_PUBLIC_SUPABASE_URL,supabaseKey=process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,authClient,
- store=createPortraitStore(),dailyLimit=Number(process.env.DAILY_GENERATION_LIMIT||3),retentionDays=Number(process.env.UNPAID_RETENTION_DAYS||7)}={}){
+ store=createPortraitStore()}={}){
  let auth=authClient;
  if(!auth&&supabaseUrl&&supabaseKey){try{auth=createClient(supabaseUrl,supabaseKey,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},global:{fetch:(url,options)=>fetch(url,{...options,signal:AbortSignal.timeout(10000)})}});}catch{/* Fail closed. */}}
  // One in-flight generation per Node process, same as the original local backend.
@@ -64,15 +64,14 @@ export function createHandlers({apiKey=process.env.OPENAI_API_KEY,model=process.
      images.push(await toFile(buffer,`reference-${images.length+1}.jpg`,{type:'image/jpeg'}));
     }catch{return fail('One of your photos could not be read. Use non-animated JPEG, PNG or WebP photos under 40 megapixels.',400);}
    }
-   if(!Number.isInteger(dailyLimit)||dailyLimit<1||!Number.isInteger(retentionDays)||retentionDays<1)return fail('Portrait limits are not configured correctly.',503);
-   try{if(!await store.reserveAttempt(owner,dailyLimit))return fail('Your daily generation allowance has been reached. Try again after midnight UTC.',429);}catch{return fail('Could not check your generation allowance. Please try again later.',503);}
+   try{if(!await store.reserveAttempt(owner))return json({error:'No generation attempts remain. Purchase an existing portrait to reset your allowance to 3.',code:'generation_allowance_exhausted'},429);}catch{return fail('Could not check your generation allowance. Please try again later.',503);}
    const openai=client??new OpenAI({apiKey,timeout:180_000,maxRetries:0});
    const signal=AbortSignal.any([request.signal,AbortSignal.timeout(190_000)]);
    const response=await openai.images.edit({model,image:images,n:1,size:'1024x1536',quality:'medium',output_format:'jpeg',prompt:`Create ONE photorealistic professional head-and-shoulders portrait of the same person shown in all five reference photos. Use all references to preserve their recognizable identity, facial proportions, skin tone, age, hairstyle and natural skin texture. Do not blend identities, change ethnicity, reshape the face or apply heavy beauty retouching. The subject is facing the camera with a relaxed, confident expression. ${looks[style]} Realistic photographic detail, professional composition, no text, no watermark, no collage.`},{signal});
    const base64=response.data?.[0]?.b64_json;
    if(!base64)return fail('OpenAI returned no portrait. Please try again.',502);
    const id=randomUUID();
-   const expiresAt=new Date(Date.now()+retentionDays*86400000).toISOString();
+   const expiresAt=null;
    const original=Buffer.from(base64,'base64');
    let preview;
    try{

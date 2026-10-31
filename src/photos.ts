@@ -5,7 +5,7 @@ export const styles: { id: Style; title: string; description: string; tag: strin
  {id:'casual',title:'Business Casual',description:'Polished, approachable, unmistakably you.',tag:'MOST POPULAR'},
  {id:'natural',title:'Natural Professional',description:'Soft light. An effortless first impression.',tag:'THE EVERYDAY'}
 ];
-export interface GeneratedPhoto { id: string; previewUrl: string; downloadFilename: string; paid: boolean; watermarked: boolean; expiresAt: string; style: Style }
+export interface GeneratedPhoto { id: string; previewUrl: string; downloadFilename: string; paid: boolean; watermarked: boolean; expiresAt: string|null; style: Style }
 export const canContinue = (count:number) => count === 5;
 export function fileError(file:File): string | null {
  if (!['image/jpeg','image/png','image/webp'].includes(file.type)) return `${file.name}: choose a JPEG, PNG or WebP image.`;
@@ -65,4 +65,26 @@ export function saveOriginalFile(file:File):void{
 }
 export async function downloadOriginal(id:string):Promise<void>{
  saveOriginalFile(await getOriginalFile(id));
+}
+
+export async function getGenerationAllowance():Promise<{remaining:number;limit:3}>{
+ const token=await getAccessToken();
+ const response=await fetch('/api/generation-allowance',{headers:{Authorization:'Bearer '+token},cache:'no-store'});
+ const data=await response.json();
+ if(!response.ok)throw new Error(data.error||'Could not check your generation allowance.');
+ if(data.limit!==3||!Number.isInteger(data.remaining)||data.remaining<0||data.remaining>3)throw new Error('Invalid generation allowance.');
+ return data;
+}
+
+export interface GalleryPhoto {id:string;style:Style;createdAt:string;paid:boolean}
+export type GalleryFilter='all'|'unpaid'|'purchased';
+export async function listPortraits(status:GalleryFilter,cursor?:string):Promise<{photos:GalleryPhoto[];nextCursor:string|null}>{
+ const query=new URLSearchParams({status});if(cursor)query.set('cursor',cursor);
+ const token=await getAccessToken();const res=await fetch('/api/portraits?'+query,{headers:{Authorization:'Bearer '+token},cache:'no-store'});
+ const body=await res.json();if(!res.ok)throw new Error(body.error||'Could not load your gallery.');return body;
+}
+export async function loadThumbnail(id:string):Promise<Blob>{return (await portraitRequest(id,'/thumbnail')).blob();}
+export async function deletePortrait(id:string,paid:boolean):Promise<void>{
+ const token=await getAccessToken();const res=await fetch('/api/portraits/'+encodeURIComponent(id),{method:'DELETE',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({confirm:true,paid})});
+ if(!res.ok){const body=await res.json();throw new Error(body.error||'Could not delete your photo.');}
 }

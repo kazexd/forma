@@ -94,3 +94,10 @@ describe('private original persistence',()=>{
  it('enforces the shared user allowance before a paid generation',async()=>{const client=fakeClient(),store=fakeStore();store.reserveAttempt.mockResolvedValue(false);expect((await submit(setup({client,store}))).status).toBe(429);expect(client.images.edit).not.toHaveBeenCalled();});
  it('never leaks the generated original when persistence fails',async()=>{const client=fakeClient(),store=fakeStore();store.save.mockRejectedValue(new Error('storage'));const result=await submit(setup({client,store}));expect(result.status).toBe(503);expect(result.body.error).toContain('Do not regenerate');expect(JSON.stringify(result.body)).not.toContain(image.toString('base64'));});
 });
+
+
+describe('purchase-reset allowance consumption',()=>{
+ it('returns a stable exhausted code and never invokes OpenAI',async()=>{const store=fakeStore(),client=fakeClient();store.reserveAttempt.mockResolvedValue(false);const res=await submit(setup({store,client}));expect(res.status).toBe(429);expect(res.body.code).toBe('generation_allowance_exhausted');expect(client.images.edit).not.toHaveBeenCalled();expect(store.reserveAttempt).toHaveBeenCalledWith('test-user');});
+ it('does not consume attempts for invalid uploads',async()=>{const store=fakeStore();await submit(setup({store,client:fakeClient()}),{count:4});expect(store.reserveAttempt).not.toHaveBeenCalled();});
+ it('consumes a slot for failed upstream generation',async()=>{const store=fakeStore(),client=fakeClient();client.images.edit.mockRejectedValue(new Error('upstream'));await submit(setup({store,client}));expect(store.reserveAttempt).toHaveBeenCalledTimes(1);});
+});
