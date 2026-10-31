@@ -55,3 +55,9 @@ describe('payment status reconciliation',()=>{
  it('does not contact Stripe for another user’s portrait',async()=>{const {app,record,stripe}=setup();record.owner_id='other';expect((await app.detail(request(),id)).status).toBe(404);expect(stripe.checkout.sessions.retrieve).not.toHaveBeenCalled();});
  it('keeps access locked when Stripe verification is unavailable',async()=>{const {app,store,stripe}=setup();stripe.checkout.sessions.retrieve.mockRejectedValue(new Error('network'));expect((await app.detail(request(),id)).status).toBe(503);expect(store.markPaid).not.toHaveBeenCalled();});
 });
+
+
+describe('purchased portrait display',()=>{
+ it('returns the original bytes only for a verified purchased portrait',async()=>{const {app,record,store,stripe}=setup();record.payment_state='paid';store.read.mockResolvedValue(Buffer.from('ORIGINAL'));const res=await app.detail(request(),id);const {photo}=await res.json();expect(photo.paid).toBe(true);expect(photo.watermarked).toBe(false);expect(photo.previewUrl).toBe('data:image/jpeg;base64,'+Buffer.from('ORIGINAL').toString('base64'));expect(store.read).toHaveBeenCalledWith('private/original.jpg');expect(stripe.checkout.sessions.retrieve).not.toHaveBeenCalled();});
+ it('shows the original immediately after verified payment recovery',async()=>{const {app,store}=setup();const res=await app.detail(request(),id);expect((await res.json()).photo.watermarked).toBe(false);expect(store.read).toHaveBeenCalledWith('private/original.jpg');});
+});

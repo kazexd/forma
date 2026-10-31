@@ -5,7 +5,7 @@ export const styles: { id: Style; title: string; description: string; tag: strin
  {id:'casual',title:'Business Casual',description:'Polished, approachable, unmistakably you.',tag:'MOST POPULAR'},
  {id:'natural',title:'Natural Professional',description:'Soft light. An effortless first impression.',tag:'THE EVERYDAY'}
 ];
-export interface GeneratedPhoto { id: string; previewUrl: string; downloadFilename: string; paid: boolean; watermarked: true; expiresAt: string; style: Style }
+export interface GeneratedPhoto { id: string; previewUrl: string; downloadFilename: string; paid: boolean; watermarked: boolean; expiresAt: string; style: Style }
 export const canContinue = (count:number) => count === 5;
 export function fileError(file:File): string | null {
  if (!['image/jpeg','image/png','image/webp'].includes(file.type)) return `${file.name}: choose a JPEG, PNG or WebP image.`;
@@ -47,7 +47,7 @@ async function portraitRequest(id:string,action='' ,method='GET'){
 }
 export async function loadPortrait(id:string):Promise<GeneratedPhoto>{
  const response=await portraitRequest(id);const payload=await response.json();
- if(!payload.photo||payload.photo.watermarked!==true||!payload.photo.previewUrl?.startsWith('data:image/jpeg;base64,'))throw new Error('Invalid watermarked preview.');
+ if(!payload.photo||typeof payload.photo.paid!=='boolean'||payload.photo.watermarked!==!payload.photo.paid||!payload.photo.previewUrl?.startsWith('data:image/jpeg;base64,'))throw new Error('Invalid portrait preview.');
  return payload.photo;
 }
 export async function buyPortrait(id:string):Promise<void>{
