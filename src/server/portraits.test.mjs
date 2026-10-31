@@ -5,7 +5,8 @@ import {MAX_REQUEST_BYTES} from './uploads.mjs';
 const image=await sharp({create:{width:20,height:20,channels:3,background:'#aabbcc'}}).jpeg().toBuffer();
 const validAuth=()=>({auth:{getUser:vi.fn().mockResolvedValue({data:{user:{id:'test-user'}},error:null})}});
 const fakeClient=()=>({images:{edit:vi.fn().mockResolvedValue({data:[{b64_json:image.toString('base64')}]})}});
-const setup=(options={})=>createHandlers({authClient:validAuth(),...options});
+const fakeStore=()=>({ready:vi.fn().mockResolvedValue(),reserveAttempt:vi.fn().mockResolvedValue(true),save:vi.fn().mockResolvedValue()});
+const setup=(options={})=>createHandlers({authClient:validAuth(),store:fakeStore(),...options});
 function request({count=5,style='casual',consent='true',buffer=image,mime='image/jpeg',authorization='Bearer valid-token',headers={},signal,extraFields=[]}={}){
  const form=new FormData();form.append('style',style);form.append('consent',consent);
  for(const [key,value] of extraFields)form.append(key,value);
@@ -48,4 +49,48 @@ describe('loopback request origins',()=>{
 describe('multipart boundary sizes',()=>{
  it('accepts an exactly 10 MiB file at the parser boundary',async()=>{const {parseUpload}=await import('./uploads.mjs');const form=new FormData();form.append('style','casual');form.append('consent','true');form.append('photos',new Blob([Buffer.alloc(10*1024*1024)],{type:'image/jpeg'}),'large.jpg');for(let i=0;i<4;i++)form.append('photos',new Blob([image],{type:'image/jpeg'}),'small.jpg');const upload=await parseUpload(new Request('http://localhost:5173/api/generate',{method:'POST',body:form}));expect(upload.files).toHaveLength(5);expect(upload.files[0].buffer.length).toBe(10*1024*1024);});
  it('rejects a declared MIME type that does not match decoded pixels',async()=>{const client=fakeClient();expect((await submit(setup({client}),{mime:'image/png'})).status).toBe(400);expect(client.images.edit).not.toHaveBeenCalled();});
+});
+
+describe('OpenAI quota and rate limit guidance',()=>{
+ it.each([
+  [{code:'credit_balance_exhausted'},'credit balance is exhausted'],
+  [{code:'organization_spend_limit_exceeded'},'organization spend limit'],
+  [{code:'project_spend_limit_exceeded'},'project spend limit'],
+  [{code:'organization_usage_limit_exceeded'},'organization usage limit'],
+  [{code:'insufficient_quota'},'quota is unavailable'],
+  [{type:'insufficient_quota'},'quota is unavailable'],
+  [{code:'rate_limit_exceeded'},'temporary rate limit'],
+  [{code:'slow_down'},'temporary rate limit'],
+  [{type:'rate_limit_error'},'temporary rate limit'],
+  [{error:{code:'credit_balance_exhausted',type:'insufficient_quota'}},'credit balance is exhausted'],
+  [{code:'unknown'},'Check API Billing and Limits']
+ ])('returns actionable guidance for %j without exposing upstream details or retrying',async(details,expected)=>{
+  const client={images:{edit:vi.fn().mockRejectedValue({status:429,...details,message:'private upstream details',request_id:'private-id'})}};
+  const result=await submit(setup({client}));
+  expect(result.status).toBe(429);expect(result.body.error).toContain(expected);
+  expect(JSON.stringify(result.body)).not.toContain('private');expect(client.images.edit).toHaveBeenCalledTimes(1);
+ });
+});
+
+describe('reference image dimensions',()=>{
+ it.each([[2048,1536,1024,768],[1536,2048,768,1024],[320,240,320,240]])('prepares a %i × %i reference as %i × %i without upscaling',async(width,height,expectedWidth,expectedHeight)=>{
+  const buffer=await sharp({create:{width,height,channels:3,background:'#aabbcc'}}).jpeg().toBuffer();
+  const client=fakeClient();
+  const result=await submit(setup({client}),{buffer});
+  expect(result.status).toBe(200);
+  const [options]=client.images.edit.mock.calls[0];
+  for(const file of options.image){
+   const metadata=await sharp(Buffer.from(await file.arrayBuffer())).metadata();
+   expect(metadata.width).toBe(expectedWidth);expect(metadata.height).toBe(expectedHeight);expect(metadata.format).toBe('jpeg');
+  }
+  expect(options.size).toBe('1024x1536');expect(options.quality).toBe('medium');
+ });
+});
+
+describe('private original persistence',()=>{
+ it('returns different watermarked image bytes and never includes original paths',async()=>{const client=fakeClient(),store=fakeStore();const result=await submit(setup({client,store}));expect(result.status).toBe(200);expect(result.body.photos[0].watermarked).toBe(true);expect(result.body.photos[0].paid).toBe(false);expect(result.body.photos[0].previewUrl).not.toBe('data:image/jpeg;base64,'+image.toString('base64'));expect(store.save).toHaveBeenCalledWith(expect.objectContaining({owner_id:'test-user'}),expect.any(Buffer),expect.any(Buffer));expect(JSON.stringify(result.body)).not.toContain('original_path');});
+ it('fails before OpenAI when storage is missing',async()=>{const client=fakeClient();expect((await submit(setup({client,store:null}))).status).toBe(503);expect(client.images.edit).not.toHaveBeenCalled();});
+ it('fails before OpenAI when storage is public or unavailable',async()=>{const client=fakeClient(),store=fakeStore();store.ready.mockRejectedValue(new Error('public'));expect((await submit(setup({client,store}))).status).toBe(503);expect(client.images.edit).not.toHaveBeenCalled();});
+ it('enforces the shared user allowance before a paid generation',async()=>{const client=fakeClient(),store=fakeStore();store.reserveAttempt.mockResolvedValue(false);expect((await submit(setup({client,store}))).status).toBe(429);expect(client.images.edit).not.toHaveBeenCalled();});
+ it('never leaks the generated original when persistence fails',async()=>{const client=fakeClient(),store=fakeStore();store.save.mockRejectedValue(new Error('storage'));const result=await submit(setup({client,store}));expect(result.status).toBe(503);expect(result.body.error).toContain('Do not regenerate');expect(JSON.stringify(result.body)).not.toContain(image.toString('base64'));});
 });

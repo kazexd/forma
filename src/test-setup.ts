@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import {vi,afterEach} from 'vitest';
 import {cleanup} from '@testing-library/react';
-afterEach(()=>cleanup());
+afterEach(()=>{cleanup();window.history.replaceState(null,'','/');});
 URL.createObjectURL=vi.fn(()=>`blob:test-${Math.random()}`);
 URL.revokeObjectURL=vi.fn();
 HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};
