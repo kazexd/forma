@@ -322,3 +322,8 @@ The server retrieves the completed Session with expanded line items and verifies
 The private `forma_checkout_receipts` table records original subtotal, discount, tax, inclusive tax component, actual total, discount references and payment status. Fulfillment and receipt insertion are one transaction, with replay protection. This supports free orders without treating a browser success URL as proof of payment. A free order verifies fulfillment, not real card charging, and does not establish tax treatment. This feature does not enable automatic tax.
 
 Run `python scripts/test-promotions-db.py <disposable-postgres-container>` against a fresh database named `forma_test` to check the full migration chain, concurrent fulfillment, rollback and permissions. Never run the test scripts against hosted production.
+
+
+### New-account welcome
+
+Apply `supabase/migrations/20261119_new_account_welcome.sql` before deploying this UI. A private, service-only table records welcome eligibility for accounts created after this migration; existing accounts are not enrolled. The auth insert trigger only records onboarding state and never grants or resets credits. New users signing in from My Gallery return to the home page. The accessible welcome dialog introduces the existing 3 free attempts, five-photo requirement, watermarked Gallery and optional original unlocks. Closing or continuing acknowledges it on the server, so it stays dismissed across browsers and later logins. It cannot be dismissed successfully until acknowledgement saves; network errors offer retry. Missing welcome configuration does not block the main app. No uploaded photos, auth tokens or welcome decisions are stored in browser local storage.

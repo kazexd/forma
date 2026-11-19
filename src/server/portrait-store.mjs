@@ -6,6 +6,8 @@ export function createPortraitStore({url=process.env.NEXT_PUBLIC_SUPABASE_URL,ke
  if(!client&&(!url||!key))return null;
  const db=client??createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
  return {
+  async welcomePending(owner){const row=assert(await db.from('forma_account_welcome').select('acknowledged_at').eq('owner_id',owner).maybeSingle());return !!row&&row.acknowledged_at===null;},
+  async acknowledgeWelcome(owner){assert(await db.from('forma_account_welcome').update({acknowledged_at:new Date().toISOString()}).eq('owner_id',owner).is('acknowledged_at',null));},
   async billingMode(){const row=assert(await db.from('forma_billing_control').select('mode').eq('id',true).single());return row.mode;},
   async ready(){const data=assert(await db.storage.getBucket(bucket));if(data.public)throw new Error('Portrait storage must be private.');assert(await db.from('forma_portraits').select('id').limit(0));},
   async allowance(owner){return assert(await db.rpc('forma_get_generation_allowance',{p_owner:owner}));},

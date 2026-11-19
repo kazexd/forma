@@ -3,7 +3,8 @@
 import {portraitPrice} from './portrait-price.mjs';
 import PortraitSharing from './PortraitSharing';
 import Header from './Header';
-import CreditWallet from './CreditWallet';
+import AccountWelcome from './AccountWelcome';
+import PackagePaymentStatus from './PackagePaymentStatus';
 import Turnstile from './Turnstile';
 import PurchasePolicies from './PurchasePolicies';
 
@@ -94,9 +95,9 @@ export default function App(){
   return()=>{clearInterval(timer);recoveryVersion.current++;};
  },[pendingGeneration?.id,pendingGeneration?.status,busy]);
  const currentStyle=styles.find(item=>item.id===style)!;
- return <><Header auth={auth} current="create" disabled={busy||reading||purchasing} onSignedOut={reset}/>
+ return <>{auth.user&&<AccountWelcome key={auth.user.id} userId={auth.user.id}/>}<Header auth={auth} current="create" remaining={allowance} unlocks={unlocks} paymentMode={paymentMode} onRefreshCredits={refreshAllowance} disabled={busy||reading||purchasing} onSignedOut={reset}/>
  <main><nav className="steps" aria-label="Progress">{['Upload photos','Choose style','View results'].map((label,i)=><div key={label} className={`step ${step===i?'active':''} ${step>i?'done':''}`} aria-current={step===i?'step':undefined}><span className="step-number">{step>i?<Check size={14}/>:i+1}</span><span>{label}</span>{i<2&&<span className="step-line"/>}</div>)}</nav>
- {auth.user&&<CreditWallet key={auth.user.id} remaining={allowance} unlocks={unlocks} paymentMode={paymentMode} onRefresh={refreshAllowance} disabled={busy||purchasing}/>}
+ {auth.user&&<PackagePaymentStatus key={auth.user.id} onRefresh={refreshAllowance} disabled={busy||purchasing}/>}
  {auth.user&&allowanceError&&<p role="alert">{allowanceError} <button className="text-button" onClick={()=>void refreshAllowance()}>Retry allowance check</button></p>}
  {(pendingGeneration||generationMessage)&&<div className="generation-recovery"><p role="status">{generationMessage||'Your generation request has been saved. You can check its status here.'}</p>{pendingGeneration&&!busy&&<><button className="account-button" onClick={()=>void checkGeneration(pendingGeneration.id)}>Check generation status</button><a className="text-button" href="/gallery">Check My Gallery</a>{pendingGeneration.status==='uncertain'&&<button className="text-button" onClick={()=>{recoveryVersion.current++;savePending(null);setPendingGeneration(null);setGenerationMessage('The previous attempt will not be retried. Starting a new attempt will use another allowance slot if accepted.');}}>Continue with a new attempt</button>}</>}</div>}
  <div className="intro"><div className="eyebrow">YOUR NEXT CHAPTER, IN FOCUS</div><h1 ref={heading} tabIndex={-1}>{step===0?<>A great first impression.<br/><em>Starting with you.</em></>:step===1?<>Find your<br/><em>professional side.</em></>:<>Meet your next<br/><em>first impression.</em></>}</h1><p>{step===0?'Bring a few photos. We’ll show you what’s possible.':step===1?'A look that feels right for wherever you’re headed.':'A little confidence. A whole new perspective.'}</p></div>
