@@ -1,3 +1,4 @@
+import {checkoutReceipt} from './checkout-receipt.mjs';
 import {stripeConfiguration} from './stripe-config.mjs';
 import {featureEnabled} from './features.mjs';
 import sharp from 'sharp';
@@ -12,6 +13,7 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
  const stripe=billing.valid?(stripeClient??(billing.keyValid?new Stripe(stripeKey,{maxNetworkRetries:0,timeout:15000}):null)):null;
  const live=billing.live;
  async function assertMode(){if(!billing.valid||!store||await store.billingMode()!==billing.mode)throw new AccessError('Payment mode is not ready. Contact support before paying.',503);}
+ const retrieveCheckout=id=>stripe.checkout.sessions.retrieve(id,{expand:['line_items']});
  function checkSessionMode(session){if(session.livemode!==live)throw new AccessError('Checkout belongs to a different payment mode.',409);}
  const errorResponse=error=>response({error:error instanceof AccessError?error.message:'The portrait service is temporarily unavailable. Please try again.'},error instanceof AccessError?error.status:503);
  async function configuredPrice(id,setting){
@@ -24,29 +26,30 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   }
  }
  async function owned(request,id){validId(id);const user=await verify(request);if(!store)throw new AccessError('Private portrait storage is not configured.',503);await store.ready();const row=await store.get(id);if(!row||row.owner_id!==user.id||row.payment_state==='deleting')throw new AccessError('Portrait not found.',404);return row;}
- async function detail(request,id){try{let row=await owned(request,id);if(row.payment_state!=='paid'&&row.checkout_session_id&&stripe){const session=await stripe.checkout.sessions.retrieve(row.checkout_session_id);if(session.id!==row.checkout_session_id||session.metadata?.portrait_id!==row.id)throw new Error('Checkout does not match the requested portrait.');if(await fulfill(session))row=await store.get(row.id);}const paid=row.payment_state==='paid';const preview=await store.read(paid?row.original_path:row.preview_path);return response({photo:{id:row.id,previewUrl:`data:image/jpeg;base64,${preview.toString('base64')}`,downloadFilename:`forma-${row.style}-${paid?'portrait':'preview'}.jpg`,style:row.style,paid,watermarked:!paid,expiresAt:row.expires_at}});}catch(error){return errorResponse(error);}}
+ async function detail(request,id){try{let row=await owned(request,id);if(row.payment_state!=='paid'&&row.checkout_session_id&&stripe){const session=await retrieveCheckout(row.checkout_session_id);if(session.id!==row.checkout_session_id||session.metadata?.portrait_id!==row.id)throw new Error('Checkout does not match the requested portrait.');if(await fulfill(session))row=await store.get(row.id);}const paid=row.payment_state==='paid';const preview=await store.read(paid?row.original_path:row.preview_path);return response({photo:{id:row.id,previewUrl:`data:image/jpeg;base64,${preview.toString('base64')}`,downloadFilename:`forma-${row.style}-${paid?'portrait':'preview'}.jpg`,style:row.style,paid,watermarked:!paid,expiresAt:row.expires_at}});}catch(error){return errorResponse(error);}}
  async function download(request,id){try{const row=await owned(request,id);if(row.payment_state!=='paid')throw new AccessError('Purchase this portrait before downloading the original.',402);const image=await store.read(row.original_path);return new Response(new Uint8Array(image),{headers:{'Content-Type':'image/jpeg','Content-Disposition':`attachment; filename="forma-${row.style}-portrait.jpg"`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});}catch(error){return errorResponse(error);}}
  async function fulfill(session){
   await assertMode();
-  if(session.livemode!==live||session.mode!=='payment'||session.payment_status!=='paid')return false;
+  if(session.livemode!==live||session.mode!=='payment'||session.status!=='complete'||!['paid','no_payment_required'].includes(session.payment_status))return false;
   if(session.metadata?.kind==='credit_package')return fulfillPackage(session);
   const id=session.metadata?.portrait_id;if(!id)return false;
   const row=await store.get(id);if(!row||row.payment_state==='deleting')return false;
   if(row.stripe_livemode!==live)throw new Error('Purchase mode mismatch');
-  if(session.client_reference_id!==row.id||session.metadata.owner_id!==row.owner_id||session.metadata.checkout_key!==row.checkout_key||(row.checkout_session_id&&row.checkout_session_id!==session.id)||session.amount_total!==row.price_amount||session.currency!==row.price_currency)throw new Error('Payment does not match the recorded purchase.');
+  if(session.client_reference_id!==row.id||session.metadata.owner_id!==row.owner_id||session.metadata.checkout_key!==row.checkout_key||(row.checkout_session_id&&row.checkout_session_id!==session.id)||session.currency!==row.price_currency)throw new Error('Payment does not match the recorded purchase.');
+  const receipt=checkoutReceipt(session,row);
   if(row.payment_state==='paid')return true;
-  if(!await store.markPaid(row,session)){
+  if(!await store.markPaid(row,session,receipt)){
    const current=await store.get(row.id);
    if(current?.payment_state!=='paid'||current.checkout_session_id!==session.id)throw new Error('Payment could not be recorded.');
   }
   return true;
  }
- function sessionOptions(row){return{mode:'payment',line_items:[{price:row.price_id,quantity:1}],client_reference_id:row.id,metadata:{portrait_id:row.id,owner_id:row.owner_id,checkout_key:row.checkout_key},success_url:`${row.checkout_origin}/?portrait=${row.id}&checkout=success`,cancel_url:`${row.checkout_origin}/?portrait=${row.id}&checkout=cancelled`,expires_at:row.checkout_expires_at};}
+ function sessionOptions(row){return{mode:'payment',...(row.promotions_enabled===true?{allow_promotion_codes:true}:{}),line_items:[{price:row.price_id,quantity:1}],client_reference_id:row.id,metadata:{portrait_id:row.id,owner_id:row.owner_id,checkout_key:row.checkout_key},success_url:`${row.checkout_origin}/?portrait=${row.id}&checkout=success`,cancel_url:`${row.checkout_origin}/?portrait=${row.id}&checkout=cancelled`,expires_at:row.checkout_expires_at};}
  async function checkout(request,id){try{
   const origin=checkOrigin(request);if(!checkoutEnabled)throw new AccessError('Checkout is temporarily unavailable. Please try again later.',503);let row=await owned(request,id);await assertMode();
   if(row.payment_state==='paid')throw new AccessError('This portrait is already purchased. Download the original instead.',409);
   if(!stripe||!priceId||!webhookSecret)throw new AccessError('Checkout is not configured yet. Matching Stripe price and webhook settings are required.',503);
-  if(row.checkout_session_id){const session=await stripe.checkout.sessions.retrieve(row.checkout_session_id);checkSessionMode(session);if(session.status==='open'&&session.url){if(row.price_amount!==portraitPrice.amount||row.price_currency!==portraitPrice.currency){await stripe.checkout.sessions.expire(session.id);throw new AccessError('The price has changed. Refresh purchase status and try again.',409);}return response({url:session.url});}if(session.status!=='expired')throw new AccessError('Payment confirmation is pending. Refresh the portrait status shortly.',409);await store.clearCheckout(row);row=await store.get(id);}
+  if(row.checkout_session_id){const session=await retrieveCheckout(row.checkout_session_id);checkSessionMode(session);if(session.status==='open'&&session.url){if(row.price_amount!==portraitPrice.amount||row.price_currency!==portraitPrice.currency){await stripe.checkout.sessions.expire(session.id);throw new AccessError('The price has changed. Refresh purchase status and try again.',409);}return response({url:session.url});}if(session.status!=='expired')throw new AccessError('Payment confirmation is pending. Refresh the portrait status shortly.',409);await store.clearCheckout(row);row=await store.get(id);}
   if(!row.checkout_key){const price=await configuredPrice(priceId,'STRIPE_PRICE_ID');if(price.livemode!==live||!price.active||price.type!=='one_time'||price.unit_amount!==portraitPrice.amount||price.currency!==portraitPrice.currency)throw new AccessError(`Configure an active, one-time Stripe ${billing.mode} price of CA$3.99 (CAD).`,503);row=await store.reserveCheckout(row,price,origin);if(!row)throw new AccessError('This portrait is no longer available for checkout. Refresh its status.',409);}
   if(row.stripe_livemode!==live)throw new AccessError('Checkout belongs to a different payment mode.',409);
   if(row.price_amount!==portraitPrice.amount||row.price_currency!==portraitPrice.currency)throw new AccessError('This checkout has a different price. Refresh or contact support before paying.',409);
@@ -60,8 +63,9 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   if(!id||!owner)return false;
   const order=await store.creditOrder(owner,id);if(!order)throw new Error('Package order missing');
   if(order.stripe_livemode!==live)throw new Error('Package mode mismatch');
-  if(session.client_reference_id!==order.id||(order.checkout_session_id&&order.checkout_session_id!==session.id)||session.amount_total!==packagePrice.amount||session.amount_total!==order.price_amount||session.currency!==order.price_currency)throw new Error('Package payment mismatch');
-  if(!await store.completeCreditOrder(order,session))throw new Error('Package payment could not be recorded');
+  if(session.client_reference_id!==order.id||(order.checkout_session_id&&order.checkout_session_id!==session.id)||session.currency!==order.price_currency)throw new Error('Package payment mismatch');
+  const receipt=checkoutReceipt(session,order);
+  if(!await store.completeCreditOrder(order,session,receipt))throw new Error('Package payment could not be recorded');
   return true;
  }
  async function packageCheckout(request){let stage='validate';try{
@@ -73,7 +77,7 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   stage='order_reservation';const order=await store.reserveCreditOrder(user.id,price,origin);if(!order)throw new Error('Could not reserve package order');
   if(order.stripe_livemode!==live)throw new AccessError('Package belongs to a different payment mode.',409);
   if(order.checkout_session_id){
-   stage='session_lookup';const session=await stripe.checkout.sessions.retrieve(order.checkout_session_id);checkSessionMode(session);
+   stage='session_lookup';const session=await retrieveCheckout(order.checkout_session_id);checkSessionMode(session);
    if(session.id!==order.checkout_session_id||session.metadata?.order_id!==order.id||session.metadata?.owner_id!==user.id)throw new Error('Package checkout mismatch');
    stage='payment_reconciliation';if(await fulfill(session))return response({paid:true,orderId:order.id});
    if(session.status==='open'&&session.url){
@@ -91,7 +95,7 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   if(order.price_currency!==packagePrice.currency||order.price_amount!==packagePrice.amount)throw new AccessError('A previous package checkout uses different pricing and needs reconciliation. Contact support before paying.',409);
   // Never recreate a session after Stripe may have discarded its idempotency key.
   if(order.checkout_expires_at<Math.floor(Date.now()/1000)+1800)throw new AccessError('This package checkout needs reconciliation. Contact support before buying again.',409);
-  stage='session_creation';const session=await stripe.checkout.sessions.create({mode:'payment',line_items:[{price:order.price_id,quantity:1}],client_reference_id:order.id,metadata:{kind:'credit_package',order_id:order.id,owner_id:user.id},success_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=success`,cancel_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=cancelled`,expires_at:order.checkout_expires_at},{idempotencyKey:'credit-package-v1-'+order.id});
+  stage='session_creation';const session=await stripe.checkout.sessions.create({mode:'payment',...(order.promotions_enabled===true?{allow_promotion_codes:true}:{}),line_items:[{price:order.price_id,quantity:1}],client_reference_id:order.id,metadata:{kind:'credit_package',order_id:order.id,owner_id:user.id},success_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=success`,cancel_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=cancelled`,expires_at:order.checkout_expires_at},{idempotencyKey:'credit-package-v1-'+order.id});
   if(session.livemode!==live||!session.url)throw new Error('Invalid checkout');
   stage='session_attachment';await store.attachCreditSession(order,session.id);return response({url:session.url});
  }catch(error){
@@ -109,7 +113,7 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   if(order.stripe_livemode!==live)throw new AccessError('Package belongs to a different payment mode.',409);
   if(order.state==='pending'&&order.checkout_session_id){
    if(!stripe)throw new AccessError('Payment verification is unavailable.',503);
-   const session=await stripe.checkout.sessions.retrieve(order.checkout_session_id);checkSessionMode(session);
+   const session=await retrieveCheckout(order.checkout_session_id);checkSessionMode(session);
    if(session.id!==order.checkout_session_id||session.metadata?.order_id!==order.id||session.metadata?.owner_id!==user.id)throw new Error('Package checkout mismatch');
    if(await fulfill(session))order=await store.creditOrder(user.id,id);
    else if(session.status==='expired'&&session.payment_status==='unpaid'){await store.expireCreditOrder(order);order={...order,state:'expired'};}
@@ -121,10 +125,10 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   if(row.payment_state==='paid')return response({unlocked:true});
   if(row.checkout_key){
    if(!stripe||!row.checkout_session_id)throw new AccessError('Checkout is unresolved. Refresh purchase status before using a credit.',409);
-   let session=await stripe.checkout.sessions.retrieve(row.checkout_session_id);checkSessionMode(session);
+   let session=await retrieveCheckout(row.checkout_session_id);checkSessionMode(session);
    if(session.id!==row.checkout_session_id||session.metadata?.portrait_id!==row.id)throw new Error('Checkout mismatch');
    if(session.status==='open')session=await stripe.checkout.sessions.expire(session.id);
-   if(session.payment_status==='paid'){await fulfill(session);return response({unlocked:true});}
+   if(await fulfill(session))return response({unlocked:true});
    if(session.status!=='expired'||session.payment_status!=='unpaid')throw new AccessError('Payment is processing. Refresh purchase status before using a credit.',409);
   }
   const result=await store.unlockPortrait(row);
@@ -146,7 +150,7 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   }catch{return response({error:'Invalid Stripe webhook signature.'},400);}
   if(event.livemode!==live)return response({error:'Webhook payment mode does not match this service.'},400);
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded'].includes(event.type))return response({received:true});
-  try{const session=await stripe.checkout.sessions.retrieve(event.data.object.id);checkSessionMode(session);await fulfill(session);return response({received:true});}catch{return response({error:'Payment could not be recorded. Stripe should retry delivery.'},500);}
+  try{const session=await retrieveCheckout(event.data.object.id);checkSessionMode(session);await fulfill(session);return response({received:true});}catch{return response({error:'Payment could not be recorded. Stripe should retry delivery.'},500);}
  }
  async function list(request){try{
   const user=await verify(request);if(!store)throw new AccessError('Private portrait storage is not configured.',503);
@@ -171,10 +175,10 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
    if(confirmation.paid!==(row.payment_state==='paid'))throw new AccessError('Purchase status changed. Refresh and confirm deletion again.',409);
    if(row.payment_state==='unpaid'&&row.checkout_key){
     if(!stripe||!row.checkout_session_id)throw new AccessError('Checkout is unresolved. Refresh payment status or contact support before deleting.',409);
-    let session=await stripe.checkout.sessions.retrieve(row.checkout_session_id);checkSessionMode(session);
+    let session=await retrieveCheckout(row.checkout_session_id);checkSessionMode(session);
     if(session.id!==row.checkout_session_id||session.metadata?.portrait_id!==row.id)throw new Error('Checkout mismatch');
     if(session.status==='open')session=await stripe.checkout.sessions.expire(session.id);
-    if(session.payment_status==='paid'){await fulfill(session);throw new AccessError('Payment confirmed. Refresh and confirm deletion of the purchased original again.',409);}
+    if(await fulfill(session))throw new AccessError('Payment confirmed. Refresh and confirm deletion of the purchased original again.',409);
     if(session.status!=='expired'||session.payment_status!=='unpaid')throw new AccessError('Payment is processing. Try deleting again after payment is resolved.',409);
    }
    if(!await store.claimDelete(row))throw new AccessError('Portrait status changed. Refresh before deleting.',409);

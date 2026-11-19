@@ -14,7 +14,7 @@ export function createPortraitStore({url=process.env.NEXT_PUBLIC_SUPABASE_URL,ke
   async reserveCreditOrder(owner,price,origin){const rows=assert(await db.rpc('forma_reserve_credit_order_cad',{p_owner:owner,p_id:crypto.randomUUID(),p_price:price.id,p_origin:origin,p_expiry:Math.floor(Date.now()/1000)+3600,p_live:billing.live}));return rows?.[0]??null;},
   async attachCreditSession(order,id){assert(await db.from('forma_credit_orders').update({checkout_session_id:id}).eq('id',order.id).eq('owner_id',order.owner_id).eq('state','pending'));},
   async expireCreditOrder(order){assert(await db.from('forma_credit_orders').update({state:'expired'}).eq('id',order.id).eq('owner_id',order.owner_id).eq('state','pending').eq('checkout_session_id',order.checkout_session_id));},
-  async completeCreditOrder(order,session){return assert(await db.rpc('forma_complete_credit_order_mode',{p_owner:order.owner_id,p_id:order.id,p_session:session.id,p_amount:session.amount_total,p_currency:session.currency,p_live:session.livemode}));},
+  async completeCreditOrder(order,session,receipt){return assert(await db.rpc('forma_complete_credit_order_discounted',{p_owner:order.owner_id,p_id:order.id,p_session:session.id,p_live:session.livemode,p_receipt:receipt}));},
   async unlockPortrait(row){return assert(await db.rpc('forma_unlock_portrait_mode',{p_owner:row.owner_id,p_id:row.id,p_key:row.checkout_key,p_session:row.checkout_session_id,p_live:billing.live}));},
   async generationRateAllowed(owner){return assert(await db.rpc('forma_generation_rate_allowed',{p_owner:owner}));},
   async generationRequest(owner,id){return assert(await db.from('forma_generation_requests').select('id,status,portrait_id,style,fingerprint,lease_until').eq('id',id).eq('owner_id',owner).maybeSingle());},
@@ -39,7 +39,7 @@ export function createPortraitStore({url=process.env.NEXT_PUBLIC_SUPABASE_URL,ke
   async reserveCheckout(row,price,origin){const data=assert(await db.rpc('forma_reserve_checkout_mode',{p_id:row.id,p_owner:row.owner_id,p_key:crypto.randomUUID(),p_price:price.id,p_amount:price.unit_amount,p_currency:price.currency,p_origin:origin,p_expiry:Math.floor(Date.now()/1000)+3600,p_live:billing.live}));return data?.[0]??null;},
   async attachSession(row,id){assert(await db.from('forma_portraits').update({checkout_session_id:id}).eq('id',row.id).eq('checkout_key',row.checkout_key));},
   async clearCheckout(row){assert(await db.from('forma_portraits').update({checkout_key:null,checkout_session_id:null}).eq('id',row.id).eq('checkout_key',row.checkout_key).eq('payment_state','unpaid'));},
-  async markPaid(row,session){return assert(await db.rpc('forma_complete_purchase_mode',{p_id:row.id,p_owner:row.owner_id,p_key:row.checkout_key,p_session:session.id,p_amount:session.amount_total,p_currency:session.currency,p_live:session.livemode}));},
+  async markPaid(row,session,receipt){return assert(await db.rpc('forma_complete_purchase_discounted',{p_id:row.id,p_owner:row.owner_id,p_key:row.checkout_key,p_session:session.id,p_live:session.livemode,p_receipt:receipt}));},
   async list(owner,status,cursor){
    let query=db.from('forma_portraits').select('id,style,created_at,payment_state').eq('owner_id',owner).in('payment_state',status==='all'?['paid','unpaid']:[status==='purchased'?'paid':'unpaid']).order('created_at',{ascending:false}).order('id',{ascending:false}).limit(13);
    if(cursor)query=query.or(`created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
