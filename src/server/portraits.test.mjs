@@ -6,7 +6,7 @@ const image=await sharp({create:{width:20,height:20,channels:3,background:'#aabb
 const validAuth=()=>({auth:{getUser:vi.fn().mockResolvedValue({data:{user:{id:'test-user'}},error:null})}});
 const fakeClient=()=>({images:{edit:vi.fn().mockResolvedValue({data:[{b64_json:image.toString('base64')}]})}});
 const fakeStore=()=>({ready:vi.fn().mockResolvedValue(),reserveAttempt:vi.fn().mockResolvedValue(true),save:vi.fn().mockResolvedValue()});
-const setup=(options={})=>createHandlers({authClient:validAuth(),store:fakeStore(),...options});
+const setup=(options={})=>createHandlers({authClient:validAuth(),store:fakeStore(),generationEnabled:true,...options});
 function request({count=5,style='casual',consent='true',buffer=image,mime='image/jpeg',authorization='Bearer valid-token',headers={},signal,extraFields=[]}={}){
  const form=new FormData();form.append('style',style);form.append('consent',consent);
  for(const [key,value] of extraFields)form.append(key,value);
@@ -101,3 +101,6 @@ describe('purchase-reset allowance consumption',()=>{
  it('does not consume attempts for invalid uploads',async()=>{const store=fakeStore();await submit(setup({store,client:fakeClient()}),{count:4});expect(store.reserveAttempt).not.toHaveBeenCalled();});
  it('consumes a slot for failed upstream generation',async()=>{const store=fakeStore(),client=fakeClient();client.images.edit.mockRejectedValue(new Error('upstream'));await submit(setup({store,client}));expect(store.reserveAttempt).toHaveBeenCalledTimes(1);});
 });
+
+
+it('blocks disabled generation before uploads, allowance consumption or OpenAI',async()=>{const client=fakeClient(),store=fakeStore();const result=await submit(setup({generationEnabled:false,client,store}));expect(result.status).toBe(503);expect(store.reserveAttempt).not.toHaveBeenCalled();expect(store.save).not.toHaveBeenCalled();expect(client.images.edit).not.toHaveBeenCalled();});

@@ -156,3 +156,31 @@ Visit `/gallery` or use **My Gallery** in the header. Sign-in is required. The g
 `DELETE /api/portraits/:id` requires bearer authentication, same-origin verification, and `{confirm:true,paid:boolean}` matching the state shown in the confirmation. Both original and preview are permanently deleted. Purchased deletion warns users to download first; it does not refund payment or change generation allowance. An open unpaid Stripe session is expired first. Pending payments/unresolved reservations block deletion. A newly discovered paid session is fulfilled and requires a fresh purchased-image confirmation. Snapshot comparisons in Postgres prevent a concurrent checkout or payment from being overwritten. Storage failures leave a hidden `deleting` row for safe retry or the cleanup command. Repeated deletion of an already absent portrait succeeds without revealing other users' records.
 
 For isolated database checks, start a disposable Postgres container with `POSTGRES_DB=forma_test`, then run `python scripts/test-allowance-db.py <container-name>`. The checks include allowance transactions and gallery migration/deletion races. This script creates test schemas and must never target an existing application database.
+
+
+## First Render deployment (operations closed)
+
+This prepares an online installation only. Public launch, abuse controls and Stripe Live activation remain separate release steps. Node 22 is selected by `.node-version` and the package engines range. `npm start` runs the built app on `0.0.0.0` and Render's `PORT` (fallback 5173). `npm run dev` stays on loopback; `npm run start:local` is available for a loopback production preview. Build-time `NEXT_PUBLIC_` settings must belong to the same Supabase project used at runtime; changing them requires rebuilding.
+
+Deployment switches are server-only: `GENERATION_ENABLED` and `CHECKOUT_ENABLED`. Both default to disabled when `NODE_ENV=production`; elsewhere they default to enabled when omitted. Only the exact value `true` enables an explicitly configured switch. Copying `.env.example` explicitly disables both even in local development; set them to `true` in the local test environment if needed. Disabled operations return 503 before allowance reservation, OpenAI requests or Stripe Checkout creation. Existing paid downloads, signed webhook handling, payment reconciliation and deletion stay available.
+
+Before deploying, run CI (`npm test` and `npm run build`). GitHub Actions does this for main pushes and pull requests without credentials. In Render, create a **Web Service**, connect `kazexd/forma`, choose `main`, leave Root Directory blank, and select **Free**. Use:
+
+- Build Command: `npm ci && npm run build`
+- Start Command: `npm start`
+- Health Check Path: `/api/ready`
+- Auto-Deploy: **After CI Checks Pass** (or disable automatic deployment and deploy manually only after CI passes)
+
+Set these Render environment variables before the first build:
+
+- `NODE_ENV=production`
+- `CIRCLE_NODE_TOTAL=3` (bounds Next.js build workers to two; no runtime scaling change)
+- `GENERATION_ENABLED=false`
+- `CHECKOUT_ENABLED=false`
+- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`: copy production values directly into Render, never GitHub or chat.
+
+OpenAI and Stripe secrets can stay unset while both operations are closed. Do not upload `.env.production.local`; Next.js reads Render's settings directly. Production Google auth must be enabled in Supabase. A later step adds the actual Render HTTPS origin and `/auth/callback` to the production OAuth redirect configuration. The existing Stripe integration still rejects Live mode; merely inserting a live key will not enable real checkout.
+
+`GET /api/health` remains the lightweight configuration endpoint. `GET /api/ready` reports only `{ready:true|false}` with no-store headers and HTTP 200/503. It checks private bucket metadata, portrait/allowance table columns, required RPC names in the server-authorized schema, and the public Google provider configuration. These are read-only requests: no user creation, generation, allowance reservation, Stripe requests or database RPC execution. Probes have a 4-second network deadline, are coalesced, and are cached for 30 seconds to avoid a Supabase round trip for every Render health check. Failed checks do not leak provider errors or credentials. When operations are explicitly enabled it also checks the corresponding local key/config presence; it does not validate upstream OpenAI billing or process payments.
+
+After deployment, record the `https://...onrender.com` URL and verify readiness, sign-in setup and gallery access while generation and checkout remain closed. Render Free may sleep, restart or exhaust its included resources; this deployment does not remove those limitations or make the public paid launch complete.

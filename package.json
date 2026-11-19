@@ -6,16 +6,17 @@
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 5173",
     "build": "next build",
-    "start": "next start --hostname 127.0.0.1 --port 5173",
+    "start": "node scripts/start.mjs",
     "test": "vitest run && vitest run --config vitest.server.config.ts",
     "typecheck": "next typegen && tsc --noEmit",
-    "cleanup:portraits": "node --env-file-if-exists=.env scripts/cleanup-portraits.mjs"
+    "cleanup:portraits": "node --env-file-if-exists=.env scripts/cleanup-portraits.mjs",
+    "start:local": "next start --hostname 127.0.0.1 --port 5173"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
     "busboy": "^1.6.0",
     "lucide-react": "^0.468.0",
-    "next": "^16.4.2",
+    "next": "16.4.6",
     "openai": "^7.41.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -33,5 +34,8 @@
     "jsdom": "^26.0.0",
     "typescript": "~5.7.2",
     "vitest": "^4.1.12"
+  },
+  "engines": {
+    "node": ">=22 <23"
   }
 }

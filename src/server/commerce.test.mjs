@@ -20,7 +20,7 @@ function setup(overrides={}){
 
  const verify=vi.fn().mockResolvedValue({id:'owner'});
 
- const app=createCommerce({store,verify,stripeClient:stripe,priceId:'price_test',webhookSecret:'whsec_test',...overrides});
+ const app=createCommerce({store,verify,checkoutEnabled:true,stripeClient:stripe,priceId:'price_test',webhookSecret:'whsec_test',...overrides});
 
  return{app,store,record,stripe,session,verify};
 
@@ -140,3 +140,7 @@ describe('safe permanent deletion',()=>{
 
 it('fails closed when Stripe cannot verify a deletion',async()=>{const {app,stripe,store}=setup();stripe.checkout.sessions.retrieve.mockRejectedValue(new Error('network'));expect((await app.remove(deletion(),id)).status).toBe(503);expect(store.claimDelete).not.toHaveBeenCalled();});
 it('returns idempotent success after a portrait has already been removed',async()=>{const {app,store}=setup();store.get.mockResolvedValue(null);expect((await app.remove(deletion(),id)).status).toBe(200);expect(store.remove).not.toHaveBeenCalled();});
+
+
+it('blocks disabled checkout before reserving or creating a Stripe session',async()=>{const {app,store,stripe}=setup({checkoutEnabled:false});expect((await app.checkout(request('POST'),id)).status).toBe(503);expect(store.reserveCheckout).not.toHaveBeenCalled();expect(stripe.prices.retrieve).not.toHaveBeenCalled();expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();});
+it('keeps paid downloads and payment reconciliation available when new checkout is disabled',async()=>{const {app,store}=setup({checkoutEnabled:false});const detail=await app.detail(request(),id);expect((await detail.json()).photo.paid).toBe(true);expect(store.markPaid).toHaveBeenCalled();expect((await app.download(request(),id)).status).toBe(200);});

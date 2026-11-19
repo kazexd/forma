@@ -1,10 +1,11 @@
+import {featureEnabled} from './features.mjs';
 import sharp from 'sharp';
 import {portraitPrice} from '../portrait-price.mjs';
 import Stripe from 'stripe';
 import {createPortraitStore} from './portrait-store.mjs';
 import {createVerifier,checkOrigin,validId,AccessError,response} from './access.mjs';
 
-export function createCommerce({store=createPortraitStore(),verify=createVerifier(),stripeKey=process.env.STRIPE_SECRET_KEY,priceId=process.env.STRIPE_PRICE_ID,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET,stripeClient}={}){
+export function createCommerce({store=createPortraitStore(),verify=createVerifier(),stripeKey=process.env.STRIPE_SECRET_KEY,priceId=process.env.STRIPE_PRICE_ID,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET,stripeClient,checkoutEnabled=featureEnabled('CHECKOUT_ENABLED')}={}){
  // This implementation deliberately cannot accept live charges.
  const stripe=stripeClient??(stripeKey?.startsWith('sk_test_')?new Stripe(stripeKey,{maxNetworkRetries:0,timeout:15000}):null);
  const errorResponse=error=>response({error:error instanceof AccessError?error.message:'The portrait service is temporarily unavailable. Please try again.'},error instanceof AccessError?error.status:503);
@@ -25,7 +26,7 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
  }
  function sessionOptions(row){return{mode:'payment',line_items:[{price:row.price_id,quantity:1}],client_reference_id:row.id,metadata:{portrait_id:row.id,owner_id:row.owner_id,checkout_key:row.checkout_key},success_url:`${row.checkout_origin}/?portrait=${row.id}&checkout=success`,cancel_url:`${row.checkout_origin}/?portrait=${row.id}&checkout=cancelled`,expires_at:row.checkout_expires_at};}
  async function checkout(request,id){try{
-  const origin=checkOrigin(request);let row=await owned(request,id);
+  const origin=checkOrigin(request);if(!checkoutEnabled)throw new AccessError('Checkout is temporarily unavailable. Please try again later.',503);let row=await owned(request,id);
   if(row.payment_state==='paid')throw new AccessError('This portrait is already purchased. Download the original instead.',409);
   if(!stripe||!priceId||!webhookSecret)throw new AccessError('Checkout is not configured yet. A Stripe test price and webhook setup are required.',503);
   if(row.checkout_key&&(row.price_amount!==portraitPrice.amount||row.price_currency!==portraitPrice.currency))throw new AccessError('This checkout has a different price. Contact support before paying.',409);

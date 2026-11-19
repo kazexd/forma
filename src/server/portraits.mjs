@@ -1,3 +1,4 @@
+import {featureEnabled} from './features.mjs';
 import sharp from 'sharp';
 import OpenAI,{toFile} from 'openai';
 import {randomUUID} from 'node:crypto';
@@ -16,13 +17,14 @@ const json=(body,status=200)=>Response.json(body,{status,headers:{'Cache-Control
 const fail=(message,status)=>json({error:message},status);
 export function createHandlers({apiKey=process.env.OPENAI_API_KEY,model=process.env.OPENAI_IMAGE_MODEL||'gpt-image-2',client,
  supabaseUrl=process.env.NEXT_PUBLIC_SUPABASE_URL,supabaseKey=process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,authClient,
- store=createPortraitStore()}={}){
+ store=createPortraitStore(),generationEnabled=featureEnabled('GENERATION_ENABLED')}={}){
  let auth=authClient;
  if(!auth&&supabaseUrl&&supabaseKey){try{auth=createClient(supabaseUrl,supabaseKey,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},global:{fetch:(url,options)=>fetch(url,{...options,signal:AbortSignal.timeout(10000)})}});}catch{/* Fail closed. */}}
  // One in-flight generation per Node process, same as the original local backend.
  let active=false;
  async function GET(){return json({configured:Boolean(apiKey||client),authConfigured:Boolean(auth)});}
  async function POST(request){
+  if(!generationEnabled)return fail('Portrait generation is temporarily unavailable. Please try again later.',503);
   const origin=request.headers.get('origin');
   const requestUrl=new URL(request.url);
   const allowedOrigins=new Set([requestUrl.origin]);
