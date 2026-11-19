@@ -1,6 +1,7 @@
 import {featureEnabled} from './features.mjs';
 import sharp from 'sharp';
-import OpenAI,{toFile} from 'openai';
+import {toFile} from 'openai';
+import {imageConfiguration,createImageClient} from './image-provider.mjs';
 import {createHash} from 'node:crypto';
 import {createTurnstileVerifier,VerificationError} from './turnstile.mjs';
 import {createClient} from '@supabase/supabase-js';
@@ -16,7 +17,7 @@ const looks={
 const mimeFormats={'image/jpeg':'jpeg','image/png':'png','image/webp':'webp'};
 const json=(body,status=200)=>Response.json(body,{status,headers:{'Cache-Control':'no-store'}});
 const fail=(message,status)=>json({error:message},status);
-export function createHandlers({apiKey=process.env.OPENAI_API_KEY,model=process.env.OPENAI_IMAGE_MODEL||'gpt-image-2',client,
+export function createHandlers({configuration=imageConfiguration(),apiKey=configuration.apiKey,model=configuration.model,provider=configuration.provider,client,
  supabaseUrl=process.env.NEXT_PUBLIC_SUPABASE_URL,supabaseKey=process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,authClient,
  store=createPortraitStore(),generationEnabled=featureEnabled('GENERATION_ENABLED'),verifyHuman=createTurnstileVerifier()}={}){
  let auth=authClient;
@@ -46,7 +47,9 @@ export function createHandlers({apiKey=process.env.OPENAI_API_KEY,model=process.
    if(data.user.is_anonymous)return fail('Please sign in with Google before generating a portrait.',401);
    owner=data.user.id;
   }catch{return fail('Sign-in verification is temporarily unavailable. Please try again.',503);}
-  if(!apiKey&&!client)return fail('OpenAI is not configured. Set OPENAI_API_KEY in .env and restart the app.',503);
+  if(!['openai','openrouter'].includes(provider))return fail('IMAGE_PROVIDER must be openai or openrouter.',503);
+  if(configuration.invalid)return fail('The configured image model is not supported. Check OPENROUTER_IMAGE_MODEL.',503);
+  if(!apiKey&&!client)return fail(`${configuration.label} is not configured. Set ${configuration.keyName} and restart the app.`,503);
   if(!store)return fail('Private portrait storage is not configured. Complete the Supabase storage setup before generating.',503);
   try{await store.ready();}catch{return fail('Private portrait storage is unavailable. Check the migration and private bucket before generating.',503);}
   if(active)return fail('A portrait is already being generated. Please wait before trying again.',429);
@@ -76,7 +79,7 @@ export function createHandlers({apiKey=process.env.OPENAI_API_KEY,model=process.
    if(!existing)await verifyHuman(humanToken,requestId);
    const upload=await parseUpload(request);files=upload.files;
    const style=upload.fields.style;
-   if(upload.fields.consent!=='true')return fail('Please confirm that you may use these photos and send them to OpenAI.',400);
+   if(upload.fields.consent!=='true')return fail('Please confirm that you may use these photos and send them to the configured image provider.',400);
    if(!Object.hasOwn(looks,style))return fail('Please choose a supported portrait style.',400);
    const images=[];
    for(const file of files){
@@ -103,17 +106,19 @@ export function createHandlers({apiKey=process.env.OPENAI_API_KEY,model=process.
     return json({error:'Could not check the generation request.','code':'generation_uncertain',requestId},503);
    }
    accepted=true;
-   const openai=client??new OpenAI({apiKey,timeout:180_000,maxRetries:0});
+   const openai=client??createImageClient({provider,apiKey});
    // Continue saving the result after a browser disconnect. Never retry an upstream call.
    const signal=AbortSignal.timeout(190_000);
    const response=await openai.images.edit({model,image:images,n:1,size:'1024x1536',quality:'medium',output_format:'jpeg',prompt:`Create ONE photorealistic professional head-and-shoulders portrait of the same person shown in all five reference photos. Use all references to preserve their recognizable identity, facial proportions, skin tone, age, hairstyle and natural skin texture. Do not blend identities, change ethnicity, reshape the face or apply heavy beauty retouching. The subject is facing the camera with a relaxed, confident expression. ${looks[style]} Realistic photographic detail, professional composition, no text, no watermark, no collage.`},{signal});
    const base64=response.data?.[0]?.b64_json;
-   if(!base64)return await attemptFailure('OpenAI returned no portrait. This attempt was counted.',502);
+   if(typeof base64!=='string'||!base64||base64.length>28*1024*1024||!/^[A-Za-z0-9+/]+={0,2}$/.test(base64))return await attemptFailure('The image provider returned no valid portrait. This attempt was counted.',502);
    const id=requestId;
    const expiresAt=null;
-   const original=Buffer.from(base64,'base64');
+   let original;
    let preview;
    try{
+    original=await sharp(Buffer.from(base64,'base64'),{limitInputPixels:40_000_000,animated:false,failOn:'warning'}).rotate().jpeg({quality:95}).toBuffer();
+    if(original.length>20*1024*1024)throw new Error('Portrait exceeds storage limit');
     preview=await watermarkPreview(original);
     await store.save({id,owner_id:owner,style,original_path:`${owner}/${id}/original.jpg`,preview_path:`${owner}/${id}/preview.jpg`,expires_at:expiresAt},original,preview,requestId);
    }catch{return await attemptFailure('The portrait was generated but could not be saved securely. Do not regenerate immediately; check storage and API usage first.',503,true);}
@@ -122,6 +127,7 @@ export function createHandlers({apiKey=process.env.OPENAI_API_KEY,model=process.
    if(error instanceof VerificationError)return json({error:error.message,code:'human_verification_failed'},error.status);
    if(error instanceof UploadError)return fail(error.message,error.status);
    if(!accepted)return json({error:'Could not validate the generation request. Please try again later.',code:'generation_unavailable'},503);
+   if(provider==='openrouter'&&[400,401,402,403,404,422,429].includes(error.status))return await attemptFailure(error.status===402?'OpenRouter credits are unavailable. Check OpenRouter billing before trying again.':error.status===429?'OpenRouter rate limit reached. Wait before starting a new attempt. No automatic retry was made.':'OpenRouter could not process this request. Check the API key, model, reference-image support and privacy routing settings.',error.status===429?429:error.status===400||error.status===422?422:503);
    if(error.status===401||error.status===403)return await attemptFailure('The OpenAI key or image model access needs attention. Check the server configuration and OpenAI project permissions.',503);
    if(error.status===429){
     const code=error.code??error.error?.code;

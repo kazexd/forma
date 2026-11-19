@@ -117,3 +117,30 @@ describe('generation abuse and replay protection',()=>{
  it('marks explicit provider rejections as failed while still counting the attempt',async()=>{const store=fakeStore(),client=fakeClient();client.images.edit.mockRejectedValue({status:400});const result=await submit(setup({store,client}));expect(result.body.code).toBe('generation_failed');expect(store.beginGeneration).toHaveBeenCalledTimes(1);expect(store.finishGeneration).toHaveBeenCalledWith('test-user','11111111-1111-4111-8111-111111111111',false);});
  it('reports an uncertain request when the reservation response is lost',async()=>{const store=fakeStore(),client=fakeClient();store.beginGeneration.mockRejectedValue(new Error('connection'));const result=await submit(setup({store,client}));expect(result.body.code).toBe('generation_uncertain');expect(result.body.requestId).toBe('11111111-1111-4111-8111-111111111111');expect(client.images.edit).not.toHaveBeenCalled();});
 });
+describe('OpenRouter generation integration',()=>{
+ it('uses the shared reservation, watermark and private save flow',async()=>{
+  const client=fakeClient(),store=fakeStore();
+  const result=await submit(setup({configuration:{provider:'openrouter',label:'OpenRouter',apiKey:'router',model:'openai/gpt-image-2',keyName:'OPENROUTER_API_KEY'},client,store}));
+  expect(result.status).toBe(200);expect(result.body.photos[0]).toMatchObject({watermarked:true,paid:false});expect(store.beginGeneration).toHaveBeenCalledTimes(1);expect(store.save).toHaveBeenCalledTimes(1);expect(client.images.edit).toHaveBeenCalledTimes(1);
+ });
+ it('rejects missing router credentials or unknown providers before debiting',async()=>{
+  const store=fakeStore();
+  const missing=await submit(setup({configuration:{provider:'openrouter',label:'OpenRouter',apiKey:'',model:'openai/gpt-image-2',keyName:'OPENROUTER_API_KEY'},store}));
+  expect(missing.status).toBe(503);expect(missing.body.error).toContain('OPENROUTER_API_KEY');
+  expect((await submit(setup({provider:'unknown',apiKey:'key',store}))).status).toBe(503);expect(store.beginGeneration).not.toHaveBeenCalled();
+ });
+ it('counts explicit router billing failure and never falls back',async()=>{
+  const client=fakeClient(),store=fakeStore();client.images.edit.mockRejectedValue(Object.assign(new Error('private'),{status:402}));
+  const result=await submit(setup({provider:'openrouter',client,store}));expect(result.status).toBe(503);expect(result.body.error).toContain('OpenRouter credits');expect(store.finishGeneration).toHaveBeenCalledWith('test-user','11111111-1111-4111-8111-111111111111',false);expect(client.images.edit).toHaveBeenCalledTimes(1);
+ });
+});
+it('rejects an unsupported configured OpenRouter model before consuming allowance',async()=>{
+ const store=fakeStore();const result=await submit(setup({configuration:{provider:'openrouter',label:'OpenRouter',apiKey:'key',model:'unknown/model',invalid:true},store}));
+ expect(result.status).toBe(503);expect(store.beginGeneration).not.toHaveBeenCalled();
+});
+it('normalizes non-JPEG model output to a private JPEG and watermarked preview',async()=>{
+ const png=await sharp({create:{width:20,height:30,channels:3,background:'#aabbcc'}}).png().toBuffer();
+ const client=fakeClient(),store=fakeStore();client.images.edit.mockResolvedValue({data:[{b64_json:png.toString('base64')}]});
+ const result=await submit(setup({provider:'openrouter',client,store}));expect(result.status).toBe(200);
+ const [,original,preview]=store.save.mock.calls[0];expect((await sharp(original).metadata()).format).toBe('jpeg');expect((await sharp(preview).metadata()).format).toBe('jpeg');expect(result.body.photos[0].watermarked).toBe(true);
+});

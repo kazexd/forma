@@ -1,3 +1,4 @@
+import {imageConfiguration} from './image-provider.mjs';
 import {featureEnabled} from './features.mjs';
 import {response} from './access.mjs';
 
@@ -7,7 +8,8 @@ const requiredFunctions=['forma_get_generation_allowance','forma_generation_rate
 export async function probeDeployment({env=process.env,fetcher=fetch}={}){
  const url=env.NEXT_PUBLIC_SUPABASE_URL,key=env.SUPABASE_SERVICE_ROLE_KEY,publicKey=env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
  if(!url||!key||!publicKey)return false;
- if(featureEnabled('GENERATION_ENABLED',env)&&(!env.OPENAI_API_KEY||!env.TURNSTILE_SECRET_KEY||!env.NEXT_PUBLIC_TURNSTILE_SITE_KEY||!(env.TURNSTILE_HOSTNAME||env.RENDER_EXTERNAL_HOSTNAME)))return false;
+ const image=imageConfiguration(env);
+ if(featureEnabled('GENERATION_ENABLED',env)&&(image.invalid||!image.apiKey||!env.TURNSTILE_SECRET_KEY||!env.NEXT_PUBLIC_TURNSTILE_SITE_KEY||!(env.TURNSTILE_HOSTNAME||env.RENDER_EXTERNAL_HOSTNAME)))return false;
  if(featureEnabled('CHECKOUT_ENABLED',env)&&(!env.STRIPE_SECRET_KEY?.startsWith('sk_test_')||!env.STRIPE_PRICE_ID||!env.STRIPE_WEBHOOK_SECRET))return false;
  const origin=new URL(url).origin;
  const signal=AbortSignal.timeout(4000);

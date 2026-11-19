@@ -19,7 +19,7 @@ export default function Header({auth,current,disabled=false,onSignedOut}:HeaderP
    <a href="/gallery" aria-current={current==='gallery'?'page':undefined}>My Gallery</a>
   </nav>
   <div className="header-right">
-   <span className="demo-badge"><span/>OpenAI portraits</span>
+   <span className="demo-badge"><span/>AI portraits</span>
    <div className="account-controls">{auth.user?<>
     <span className="account-email" title={auth.user.email}>{auth.user.email}</span>
     <button className="account-button" disabled={disabled} onClick={()=>void signOut()}>Sign out</button>

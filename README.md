@@ -216,3 +216,27 @@ Busy/site-cap/storage/rate rejections do not consume account attempts. Stable re
 Validation: `npm test` and `npm run build`; `python scripts/test-generation-db.py <fresh-disposable-postgres-container>` exercises the full migration chain, concurrent debits, duplicate IDs/tokens, daily caps after payment, lease expiry, storage budget, publish rollback and private-role permissions. CI runs this against an isolated Postgres 17 service. Neither these checks nor readiness consumes real OpenAI credits or creates payments.
 
 References: https://developers.cloudflare.com/turnstile/get-started/server-side-validation/ and https://developers.cloudflare.com/turnstile/get-started/client-side-rendering/ . This rollout does not enable public generation, activate Stripe Live, provide a job queue, or finish the remaining monitoring/backups/support launch steps.
+
+## Switching image providers
+
+`IMAGE_PROVIDER=openai` (the default) uses `OPENAI_API_KEY` and `OPENAI_IMAGE_MODEL` (default `gpt-image-2`). Set `IMAGE_PROVIDER=openrouter` to use only `OPENROUTER_API_KEY` and `OPENROUTER_IMAGE_MODEL` (default `openai/gpt-image-2`). These are server-only variables: never use a `NEXT_PUBLIC_` prefix. Save the settings and restart locally, or redeploy the Render service. No migration is required. Existing portraits and pending request recovery remain independent of the selected provider. Invalid provider names and missing selected-provider credentials fail before allowance reservation; an unused provider's key is not required.
+
+OpenRouter uses `POST https://openrouter.ai/api/v1/images` with five normalized JPEG data-URL `input_references` and one output. Supported `OPENROUTER_IMAGE_MODEL` values:
+
+| Model | Environment value | Requested output |
+| --- | --- | --- |
+| GPT Image 2 (default) | `openai/gpt-image-2` | 1024x1536, medium, JPEG |
+| Qwen Image 2.1 Turbo | `qwen/qwen-image-2.1-turbo` | 1K, 2:3 portrait |
+| Seedream 5.0 Flash | `bytedance-seed/seedream-5-0-flash` | 1K, 2:3 portrait, JPEG |
+| Seedream 5.5 | `bytedance-seed/seedream-5-5` | 1K, 2:3 portrait, JPEG |
+| Google Nano Banana 2.1 | `google/gemini-nano-banana-2.1` | 1K, 2:3 portrait |
+
+The four alternative models use `resolution` and `aspect_ratio`, without OpenAI-specific `size` or `quality`. Qwen/Google omit `output_format` because it is not advertised in their capability catalog; returned raster images are converted to JPEG. 1K is a provider resolution tier, not a guarantee of exactly 1024x1536. Unknown model IDs fail before allowance reservation and fail readiness when generation is enabled. Other models, including Qwen Pro, need an explicit capability profile before use. Model availability, price, reference identity fidelity and privacy-compatible endpoint availability vary; these have not been validated with paid generations.
+
+For example, set `IMAGE_PROVIDER=openrouter`, `OPENROUTER_API_KEY=<server-only key>` and `OPENROUTER_IMAGE_MODEL=qwen/qwen-image-2.1-turbo`, then restart/redeploy. Switch only the model ID to select another supported model. No database migration or frontend rebuild-specific variable is needed. Output raster images are validated and converted to JPEG before private storage/watermarking. Remote output URLs are not fetched. Responses are bounded to 30 MiB and decoded output to 40 megapixels / 20 MiB JPEG.
+
+There is no automatic cross-provider failover or request retry. OpenRouter endpoint fallback is disabled and `data_collection: deny` excludes endpoints that train on inputs (it does not guarantee zero retention). Uploaded references are sent to OpenRouter and its selected upstream model provider when enabled. Review their policies before allowing customer uploads. The UI consent mentions both available processing routes. Account/site allowances, CAPTCHA, leases, idempotency, failure counting, gallery, payments and watermarks apply identically to both providers. Provider errors do not expose raw responses or keys; unknown outcomes retain the existing recovery protections. A failed accepted attempt still consumes an account attempt.
+
+Keep generation and checkout closed during configuration changes. Readiness checks selected-provider configuration only, not key validity, credit balance or model availability. Verify with mocked tests first, then one deliberate paid generation. Do not automatically rerun an uncertain attempt with the other provider.
+
+Reference: [OpenRouter Image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation).

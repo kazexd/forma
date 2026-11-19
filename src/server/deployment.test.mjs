@@ -56,3 +56,12 @@ describe('read-only readiness',()=>{
   await handler();expect(probe).toHaveBeenCalledTimes(1);time+=30001;expect((await handler()).status).toBe(503);expect(probe).toHaveBeenCalledTimes(2);
  });
 });
+
+it('readiness checks only the selected image provider and rejects unknown providers',async()=>{
+ const base={...env,GENERATION_ENABLED:'true',TURNSTILE_SECRET_KEY:'secret',NEXT_PUBLIC_TURNSTILE_SITE_KEY:'public',TURNSTILE_HOSTNAME:'example.com'};
+ expect(await probeDeployment({env:{...base,IMAGE_PROVIDER:'openrouter',OPENROUTER_API_KEY:'router'},fetcher:fetchFixture()})).toBe(true);
+ const fetcher=fetchFixture();
+ expect(await probeDeployment({env:{...base,IMAGE_PROVIDER:'openrouter',OPENAI_API_KEY:'direct'},fetcher})).toBe(false);
+ expect(await probeDeployment({env:{...base,IMAGE_PROVIDER:'typo',OPENAI_API_KEY:'direct'},fetcher})).toBe(false);
+ expect(fetcher).not.toHaveBeenCalled();
+});
