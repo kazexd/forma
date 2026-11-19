@@ -1,6 +1,6 @@
 import {createClient} from '@supabase/supabase-js';
 const bucket='forma-portraits';
-function assert(result){if(result.error)throw new Error('Private portrait storage is unavailable.');return result.data;}
+function assert(result){if(result.error){const error=new Error('Private portrait storage is unavailable.');if(typeof result.error.code==='string'&&/^[A-Z0-9_]{1,32}$/.test(result.error.code))error.code=result.error.code;throw error;}return result.data;}
 export function createPortraitStore({url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.SUPABASE_SERVICE_ROLE_KEY,client}={}){
  if(!client&&(!url||!key))return null;
  const db=client??createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});

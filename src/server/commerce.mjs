@@ -2,13 +2,23 @@ import {featureEnabled} from './features.mjs';
 import sharp from 'sharp';
 import {portraitPrice,packagePrice} from '../portrait-price.mjs';
 import Stripe from 'stripe';
+import {randomUUID} from 'node:crypto';
 import {createPortraitStore} from './portrait-store.mjs';
 import {createVerifier,checkOrigin,validId,AccessError,response} from './access.mjs';
 
-export function createCommerce({store=createPortraitStore(),verify=createVerifier(),stripeKey=process.env.STRIPE_SECRET_KEY,priceId=process.env.STRIPE_PRICE_ID,packagePriceId=process.env.STRIPE_PACKAGE_PRICE_ID,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET,stripeClient,checkoutEnabled=featureEnabled('CHECKOUT_ENABLED')}={}){
+export function createCommerce({store=createPortraitStore(),verify=createVerifier(),stripeKey=process.env.STRIPE_SECRET_KEY,priceId=process.env.STRIPE_PRICE_ID,packagePriceId=process.env.STRIPE_PACKAGE_PRICE_ID,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET,stripeClient,checkoutEnabled=featureEnabled('CHECKOUT_ENABLED'),logger=console.error}={}){
  // This implementation deliberately cannot accept live charges.
  const stripe=stripeClient??(stripeKey?.startsWith('sk_test_')?new Stripe(stripeKey,{maxNetworkRetries:0,timeout:15000}):null);
  const errorResponse=error=>response({error:error instanceof AccessError?error.message:'The portrait service is temporarily unavailable. Please try again.'},error instanceof AccessError?error.status:503);
+ async function configuredPrice(id,setting){
+  if(typeof id!=='string'||!id.startsWith('price_'))throw new AccessError(`${setting} must be a Stripe Price ID starting with price_, not a Product ID or payment link.`,503);
+  try{return await stripe.prices.retrieve(id);}catch(error){
+   if(error.code==='resource_missing')throw new AccessError(`${setting} was not found in the sandbox used by STRIPE_SECRET_KEY. Check that the Price and test key belong to the same Stripe account and sandbox.`,503);
+   if(error.type==='StripeAuthenticationError'||error.statusCode===401)throw new AccessError('Stripe authentication failed. Check the server test key.',503);
+   if(error.type==='StripePermissionError'||error.statusCode===403)throw new AccessError('The Stripe test key cannot read Prices. Check its permissions.',503);
+   throw new AccessError('Stripe price verification is temporarily unavailable. No checkout was created. Please try again later.',503);
+  }
+ }
  async function owned(request,id){validId(id);const user=await verify(request);if(!store)throw new AccessError('Private portrait storage is not configured.',503);await store.ready();const row=await store.get(id);if(!row||row.owner_id!==user.id||row.payment_state==='deleting')throw new AccessError('Portrait not found.',404);return row;}
  async function detail(request,id){try{let row=await owned(request,id);if(row.payment_state!=='paid'&&row.checkout_session_id&&stripe){const session=await stripe.checkout.sessions.retrieve(row.checkout_session_id);if(session.id!==row.checkout_session_id||session.metadata?.portrait_id!==row.id)throw new Error('Checkout does not match the requested portrait.');if(await fulfill(session))row=await store.get(row.id);}const paid=row.payment_state==='paid';const preview=await store.read(paid?row.original_path:row.preview_path);return response({photo:{id:row.id,previewUrl:`data:image/jpeg;base64,${preview.toString('base64')}`,downloadFilename:`forma-${row.style}-${paid?'portrait':'preview'}.jpg`,style:row.style,paid,watermarked:!paid,expiresAt:row.expires_at}});}catch(error){return errorResponse(error);}}
  async function download(request,id){try{const row=await owned(request,id);if(row.payment_state!=='paid')throw new AccessError('Purchase this portrait before downloading the original.',402);const image=await store.read(row.original_path);return new Response(new Uint8Array(image),{headers:{'Content-Type':'image/jpeg','Content-Disposition':`attachment; filename="forma-${row.style}-portrait.jpg"`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});}catch(error){return errorResponse(error);}}
@@ -46,27 +56,35 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   if(!await store.completeCreditOrder(order,session))throw new Error('Package payment could not be recorded');
   return true;
  }
- async function packageCheckout(request){try{
+ async function packageCheckout(request){let stage='validate';try{
   const origin=checkOrigin(request);if(!checkoutEnabled)throw new AccessError('Checkout is temporarily unavailable. Please try again later.',503);
   const user=await verify(request);if(!store)throw new AccessError('Credit storage is not configured.',503);
   if(!stripe||!packagePriceId||!webhookSecret)throw new AccessError('Package checkout is not configured. A Stripe test package price is required.',503);
-  const price=await stripe.prices.retrieve(packagePriceId);
+  stage='price_lookup';const price=await configuredPrice(packagePriceId,'STRIPE_PACKAGE_PRICE_ID');
   if(price.livemode!==false||!price.active||price.type!=='one_time'||price.unit_amount!==packagePrice.amount||price.currency!==packagePrice.currency)throw new AccessError('Configure an active, one-time Stripe test price of US$5.49 (USD).',503);
-  const order=await store.reserveCreditOrder(user.id,price,origin);if(!order)throw new Error('Could not reserve package order');
+  stage='order_reservation';const order=await store.reserveCreditOrder(user.id,price,origin);if(!order)throw new Error('Could not reserve package order');
   if(order.checkout_session_id){
-   const session=await stripe.checkout.sessions.retrieve(order.checkout_session_id);
+   stage='session_lookup';const session=await stripe.checkout.sessions.retrieve(order.checkout_session_id);
    if(session.id!==order.checkout_session_id||session.metadata?.order_id!==order.id||session.metadata?.owner_id!==user.id)throw new Error('Package checkout mismatch');
-   if(await fulfill(session))return response({paid:true,orderId:order.id});
+   stage='payment_reconciliation';if(await fulfill(session))return response({paid:true,orderId:order.id});
    if(session.status==='open'&&session.url)return response({url:session.url});
    if(session.status==='expired'&&session.payment_status==='unpaid'){await store.expireCreditOrder(order);throw new AccessError('The previous package checkout expired. Please try again to start a new checkout.',409);}
    throw new AccessError('Package payment is processing. Refresh its status before buying again.',409);
   }
   // Never recreate a session after Stripe may have discarded its idempotency key.
   if(order.checkout_expires_at<Math.floor(Date.now()/1000)+1800)throw new AccessError('This package checkout needs reconciliation. Contact support before buying again.',409);
-  const session=await stripe.checkout.sessions.create({mode:'payment',line_items:[{price:order.price_id,quantity:1}],client_reference_id:order.id,metadata:{kind:'credit_package',order_id:order.id,owner_id:user.id},success_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=success`,cancel_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=cancelled`,expires_at:order.checkout_expires_at},{idempotencyKey:'credit-package-v1-'+order.id});
+  stage='session_creation';const session=await stripe.checkout.sessions.create({mode:'payment',line_items:[{price:order.price_id,quantity:1}],client_reference_id:order.id,metadata:{kind:'credit_package',order_id:order.id,owner_id:user.id},success_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=success`,cancel_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=cancelled`,expires_at:order.checkout_expires_at},{idempotencyKey:'credit-package-v1-'+order.id});
   if(session.livemode!==false||!session.url)throw new Error('Invalid test checkout');
-  await store.attachCreditSession(order,session.id);return response({url:session.url});
- }catch(error){return errorResponse(error);}}
+  stage='session_attachment';await store.attachCreditSession(order,session.id);return response({url:session.url});
+ }catch(error){
+  if(error instanceof AccessError)return errorResponse(error);
+  const reference=randomUUID();
+  // Deliberately omit upstream messages, stacks, request bodies and identities.
+  const code=typeof error?.code==='string'&&/^[A-Za-z0-9_]{1,64}$/.test(error.code)?error.code:'unknown';
+  const status=Number.isInteger(error?.statusCode)?error.statusCode:null;
+  try{logger('[forma.package_checkout] '+JSON.stringify({reference,stage,code,status}));}catch{/* Diagnostics must not change payment behavior. */}
+  return response({error:`Package checkout is temporarily unavailable. Reference: ${reference}.`,code:'package_checkout_unavailable',reference},503);
+ }}
  async function packageStatus(request,id){try{
   validId(id);const user=await verify(request);if(!store)throw new AccessError('Credit storage is not configured.',503);
   let order=await store.creditOrder(user.id,id);if(!order)throw new AccessError('Package order not found.',404);

@@ -175,3 +175,23 @@ describe('credit packages and credit redemption',()=>{
  it.each([['exhausted',402],['changed',409],['not_found',404]])('handles credit unlock %s safely',async(result,status)=>{const {app,record,store}=credits();record.checkout_key=null;store.unlockPortrait.mockResolvedValue(result);expect((await app.unlock(request('POST'),id)).status).toBe(status);});
  it('rejects unresolved photo checkout and cross-account credit unlock',async()=>{const {app,record,store}=credits();record.checkout_session_id=null;expect((await app.unlock(request('POST'),id)).status).toBe(409);record.owner_id='other';expect((await app.unlock(request('POST'),id)).status).toBe(404);expect(store.unlockPortrait).not.toHaveBeenCalled();});
 });
+it.each([
+ [{code:'resource_missing'},'same Stripe account and sandbox'],
+ [{type:'StripeAuthenticationError'},'authentication failed'],
+ [{type:'StripePermissionError'},'permissions'],
+ [{type:'StripeConnectionError'},'No checkout was created']
+])('explains package price lookup failures without exposing Stripe details: %j',async(error,message)=>{
+ const {app,stripe,store}=setup({packagePriceId:'price_package'});
+ stripe.prices.retrieve.mockRejectedValue(Object.assign(new Error('private upstream details'),error));
+ const res=await app.packageCheckout(request('POST'));const body=await res.json();expect(res.status).toBe(503);expect(body.error).toContain(message);expect(body.error).not.toContain('private upstream');expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
+});
+it('rejects Product IDs used instead of package Price IDs before contacting Stripe',async()=>{
+ const {app,stripe}=setup({packagePriceId:'prod_wrong'});const res=await app.packageCheckout(request('POST'));expect((await res.json()).error).toContain('starting with price_');expect(stripe.prices.retrieve).not.toHaveBeenCalled();
+});
+it('reports a safe package checkout stage and reference for unknown storage errors',async()=>{
+ const logger=vi.fn();const {app,stripe,store}=setup({packagePriceId:'price_package',logger});
+ stripe.prices.retrieve.mockResolvedValue({id:'price_package',livemode:false,active:true,type:'one_time',unit_amount:549,currency:'usd'});
+ store.reserveCreditOrder=vi.fn().mockRejectedValue(Object.assign(new Error('private database details'),{code:'42501',details:'secret token'}));
+ const res=await app.packageCheckout(request('POST'));const body=await res.json();expect(res.status).toBe(503);expect(body.code).toBe('package_checkout_unavailable');expect(body.reference).toMatch(/^[0-9a-f-]{36}$/);
+ const log=logger.mock.calls[0][0];expect(log).toContain('order_reservation');expect(log).toContain('42501');expect(log).toContain(body.reference);expect(log).not.toContain('private');expect(log).not.toContain('secret');expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
+});
