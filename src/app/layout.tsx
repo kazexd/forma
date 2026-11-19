@@ -1,5 +1,6 @@
 import type {Metadata} from 'next';
 import type {ReactNode} from 'react';
 import '../styles.css';
+import Footer from '../Footer';
 export const metadata:Metadata={title:'Forma — Your next first impression',description:'Create a professional portrait from five recent photos.',icons:{icon:'/favicon.svg'}};
-export default function RootLayout({children}:{children:ReactNode}){return <html lang="en"><body>{children}</body></html>;}
+export default function RootLayout({children}:{children:ReactNode}){return <html lang="en"><body>{children}<Footer/></body></html>;}

@@ -1,0 +1,2 @@
+import {legalInfo} from './legal-config';
+export default function Footer(){return <footer className="site-footer"><div><a className="brand" href="/" aria-label="Forma home">forma.</a><p>Professional portraits, made personal.</p></div><nav aria-label="Help and policies"><a href="/contact">Contact</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a></nav><small>Operated by {legalInfo.operator} · {legalInfo.location}</small></footer>;}

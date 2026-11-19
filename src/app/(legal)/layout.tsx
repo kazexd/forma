@@ -1,0 +1,3 @@
+import type {ReactNode} from 'react';
+import {Camera} from 'lucide-react';
+export default function LegalLayout({children}:{children:ReactNode}){return <><a className="skip-link" href="#main-content">Skip to content</a><header className="site-header"><a className="brand" href="/" aria-label="Forma home"><span className="brand-icon"><Camera size={25}/></span>forma<span className="brand-dot">.</span></a><nav className="site-navigation" aria-label="Main navigation"><a href="/">Create portrait</a><a href="/gallery">My Gallery</a></nav><div className="header-right"><a className="account-button" href="/contact">Contact</a></div></header>{children}</>;}
