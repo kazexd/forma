@@ -1,11 +1,11 @@
 import {featureEnabled} from './features.mjs';
 import sharp from 'sharp';
-import {portraitPrice} from '../portrait-price.mjs';
+import {portraitPrice,packagePrice} from '../portrait-price.mjs';
 import Stripe from 'stripe';
 import {createPortraitStore} from './portrait-store.mjs';
 import {createVerifier,checkOrigin,validId,AccessError,response} from './access.mjs';
 
-export function createCommerce({store=createPortraitStore(),verify=createVerifier(),stripeKey=process.env.STRIPE_SECRET_KEY,priceId=process.env.STRIPE_PRICE_ID,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET,stripeClient,checkoutEnabled=featureEnabled('CHECKOUT_ENABLED')}={}){
+export function createCommerce({store=createPortraitStore(),verify=createVerifier(),stripeKey=process.env.STRIPE_SECRET_KEY,priceId=process.env.STRIPE_PRICE_ID,packagePriceId=process.env.STRIPE_PACKAGE_PRICE_ID,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET,stripeClient,checkoutEnabled=featureEnabled('CHECKOUT_ENABLED')}={}){
  // This implementation deliberately cannot accept live charges.
  const stripe=stripeClient??(stripeKey?.startsWith('sk_test_')?new Stripe(stripeKey,{maxNetworkRetries:0,timeout:15000}):null);
  const errorResponse=error=>response({error:error instanceof AccessError?error.message:'The portrait service is temporarily unavailable. Please try again.'},error instanceof AccessError?error.status:503);
@@ -14,6 +14,7 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
  async function download(request,id){try{const row=await owned(request,id);if(row.payment_state!=='paid')throw new AccessError('Purchase this portrait before downloading the original.',402);const image=await store.read(row.original_path);return new Response(new Uint8Array(image),{headers:{'Content-Type':'image/jpeg','Content-Disposition':`attachment; filename="forma-${row.style}-portrait.jpg"`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});}catch(error){return errorResponse(error);}}
  async function fulfill(session){
   if(session.livemode!==false||session.mode!=='payment'||session.payment_status!=='paid')return false;
+  if(session.metadata?.kind==='credit_package')return fulfillPackage(session);
   const id=session.metadata?.portrait_id;if(!id)return false;
   const row=await store.get(id);if(!row||row.payment_state==='deleting')return false;
   if(session.client_reference_id!==row.id||session.metadata.owner_id!==row.owner_id||session.metadata.checkout_key!==row.checkout_key||(row.checkout_session_id&&row.checkout_session_id!==session.id)||session.amount_total!==row.price_amount||session.currency!==row.price_currency)throw new Error('Payment does not match the recorded purchase.');
@@ -29,13 +30,73 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   const origin=checkOrigin(request);if(!checkoutEnabled)throw new AccessError('Checkout is temporarily unavailable. Please try again later.',503);let row=await owned(request,id);
   if(row.payment_state==='paid')throw new AccessError('This portrait is already purchased. Download the original instead.',409);
   if(!stripe||!priceId||!webhookSecret)throw new AccessError('Checkout is not configured yet. A Stripe test price and webhook setup are required.',503);
-  if(row.checkout_key&&(row.price_amount!==portraitPrice.amount||row.price_currency!==portraitPrice.currency))throw new AccessError('This checkout has a different price. Contact support before paying.',409);
-  if(row.checkout_session_id){const session=await stripe.checkout.sessions.retrieve(row.checkout_session_id);if(session.status==='open'&&session.url)return response({url:session.url});if(session.status!=='expired')throw new AccessError('Payment confirmation is pending. Refresh the portrait status shortly.',409);await store.clearCheckout(row);row=await store.get(id);}
-  if(!row.checkout_key){const price=await stripe.prices.retrieve(priceId);if(price.livemode!==false||!price.active||price.type!=='one_time'||price.unit_amount!==portraitPrice.amount||price.currency!==portraitPrice.currency)throw new AccessError('Configure an active, one-time Stripe test price of US$1.00 (USD).',503);row=await store.reserveCheckout(row,price,origin);if(!row)throw new AccessError('This portrait is no longer available for checkout. Refresh its status.',409);}
+  if(row.checkout_session_id){const session=await stripe.checkout.sessions.retrieve(row.checkout_session_id);if(session.status==='open'&&session.url){if(row.price_amount!==portraitPrice.amount||row.price_currency!==portraitPrice.currency){await stripe.checkout.sessions.expire(session.id);throw new AccessError('The price has changed. Refresh purchase status and try again.',409);}return response({url:session.url});}if(session.status!=='expired')throw new AccessError('Payment confirmation is pending. Refresh the portrait status shortly.',409);await store.clearCheckout(row);row=await store.get(id);}
+  if(!row.checkout_key){const price=await stripe.prices.retrieve(priceId);if(price.livemode!==false||!price.active||price.type!=='one_time'||price.unit_amount!==portraitPrice.amount||price.currency!==portraitPrice.currency)throw new AccessError('Configure an active, one-time Stripe test price of US$3.99 (USD).',503);row=await store.reserveCheckout(row,price,origin);if(!row)throw new AccessError('This portrait is no longer available for checkout. Refresh its status.',409);}
+  if(row.price_amount!==portraitPrice.amount||row.price_currency!==portraitPrice.currency)throw new AccessError('This checkout has a different price. Refresh or contact support before paying.',409);
   const session=await stripe.checkout.sessions.create(sessionOptions(row),{idempotencyKey:`portrait-v2-${row.checkout_key}`});
   if(session.livemode!==false||!session.url)throw new Error('Invalid test checkout session.');
   await store.attachSession(row,session.id);return response({url:session.url});
  }catch(error){return errorResponse(error);}}
+
+ async function fulfillPackage(session){
+  const id=session.metadata?.order_id,owner=session.metadata?.owner_id;
+  if(!id||!owner)return false;
+  const order=await store.creditOrder(owner,id);if(!order)throw new Error('Package order missing');
+  if(session.client_reference_id!==order.id||(order.checkout_session_id&&order.checkout_session_id!==session.id)||session.amount_total!==packagePrice.amount||session.amount_total!==order.price_amount||session.currency!==packagePrice.currency||session.currency!==order.price_currency)throw new Error('Package payment mismatch');
+  if(!await store.completeCreditOrder(order,session))throw new Error('Package payment could not be recorded');
+  return true;
+ }
+ async function packageCheckout(request){try{
+  const origin=checkOrigin(request);if(!checkoutEnabled)throw new AccessError('Checkout is temporarily unavailable. Please try again later.',503);
+  const user=await verify(request);if(!store)throw new AccessError('Credit storage is not configured.',503);
+  if(!stripe||!packagePriceId||!webhookSecret)throw new AccessError('Package checkout is not configured. A Stripe test package price is required.',503);
+  const price=await stripe.prices.retrieve(packagePriceId);
+  if(price.livemode!==false||!price.active||price.type!=='one_time'||price.unit_amount!==packagePrice.amount||price.currency!==packagePrice.currency)throw new AccessError('Configure an active, one-time Stripe test price of US$5.49 (USD).',503);
+  const order=await store.reserveCreditOrder(user.id,price,origin);if(!order)throw new Error('Could not reserve package order');
+  if(order.checkout_session_id){
+   const session=await stripe.checkout.sessions.retrieve(order.checkout_session_id);
+   if(session.id!==order.checkout_session_id||session.metadata?.order_id!==order.id||session.metadata?.owner_id!==user.id)throw new Error('Package checkout mismatch');
+   if(await fulfill(session))return response({paid:true,orderId:order.id});
+   if(session.status==='open'&&session.url)return response({url:session.url});
+   if(session.status==='expired'&&session.payment_status==='unpaid'){await store.expireCreditOrder(order);throw new AccessError('The previous package checkout expired. Please try again to start a new checkout.',409);}
+   throw new AccessError('Package payment is processing. Refresh its status before buying again.',409);
+  }
+  // Never recreate a session after Stripe may have discarded its idempotency key.
+  if(order.checkout_expires_at<Math.floor(Date.now()/1000)+1800)throw new AccessError('This package checkout needs reconciliation. Contact support before buying again.',409);
+  const session=await stripe.checkout.sessions.create({mode:'payment',line_items:[{price:order.price_id,quantity:1}],client_reference_id:order.id,metadata:{kind:'credit_package',order_id:order.id,owner_id:user.id},success_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=success`,cancel_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=cancelled`,expires_at:order.checkout_expires_at},{idempotencyKey:'credit-package-v1-'+order.id});
+  if(session.livemode!==false||!session.url)throw new Error('Invalid test checkout');
+  await store.attachCreditSession(order,session.id);return response({url:session.url});
+ }catch(error){return errorResponse(error);}}
+ async function packageStatus(request,id){try{
+  validId(id);const user=await verify(request);if(!store)throw new AccessError('Credit storage is not configured.',503);
+  let order=await store.creditOrder(user.id,id);if(!order)throw new AccessError('Package order not found.',404);
+  if(order.state==='pending'&&order.checkout_session_id){
+   if(!stripe)throw new AccessError('Payment verification is unavailable.',503);
+   const session=await stripe.checkout.sessions.retrieve(order.checkout_session_id);
+   if(session.id!==order.checkout_session_id||session.metadata?.order_id!==order.id||session.metadata?.owner_id!==user.id)throw new Error('Package checkout mismatch');
+   if(await fulfill(session))order=await store.creditOrder(user.id,id);
+   else if(session.status==='expired'&&session.payment_status==='unpaid'){await store.expireCreditOrder(order);order={...order,state:'expired'};}
+  }
+  return response({order:{id:order.id,state:order.state}});
+ }catch(error){return errorResponse(error);}}
+ async function unlock(request,id){try{
+  checkOrigin(request);let row=await owned(request,id);
+  if(row.payment_state==='paid')return response({unlocked:true});
+  if(row.checkout_key){
+   if(!stripe||!row.checkout_session_id)throw new AccessError('Checkout is unresolved. Refresh purchase status before using a credit.',409);
+   let session=await stripe.checkout.sessions.retrieve(row.checkout_session_id);
+   if(session.id!==row.checkout_session_id||session.metadata?.portrait_id!==row.id)throw new Error('Checkout mismatch');
+   if(session.status==='open')session=await stripe.checkout.sessions.expire(session.id);
+   if(session.payment_status==='paid'){await fulfill(session);return response({unlocked:true});}
+   if(session.status!=='expired'||session.payment_status!=='unpaid')throw new AccessError('Payment is processing. Refresh purchase status before using a credit.',409);
+  }
+  const result=await store.unlockPortrait(row);
+  if(result==='exhausted')throw new AccessError('No unlock credits remain. Buy a credit package or purchase this original directly.',402);
+  if(result==='not_found')throw new AccessError('Portrait not found.',404);
+  if(!['unlocked','already_unlocked'].includes(result))throw new AccessError('Portrait status changed. Refresh before trying again.',409);
+  return response({unlocked:true});
+ }catch(error){return errorResponse(error);}}
+
  async function webhook(request){
   if(!stripe||!webhookSecret||!store)return response({error:'Stripe test webhooks are not configured.'},503);
   if(Number(request.headers.get('content-length'))>1024*1024)return response({error:'Webhook too large.'},413);
@@ -89,6 +150,6 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   return{removed,skipped:0};
  }
 
- return{detail,download,checkout,webhook,cleanup,list,thumbnail,remove};
+ return{detail,download,checkout,packageCheckout,packageStatus,unlock,webhook,cleanup,list,thumbnail,remove};
 }
 export const commerce=createCommerce();

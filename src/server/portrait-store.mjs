@@ -7,6 +7,13 @@ export function createPortraitStore({url=process.env.NEXT_PUBLIC_SUPABASE_URL,ke
  return {
   async ready(){const data=assert(await db.storage.getBucket(bucket));if(data.public)throw new Error('Portrait storage must be private.');assert(await db.from('forma_portraits').select('id').limit(0));},
   async allowance(owner){return assert(await db.rpc('forma_get_generation_allowance',{p_owner:owner}));},
+  async credits(owner){return assert(await db.rpc('forma_get_credits',{p_owner:owner}));},
+  async creditOrder(owner,id){return assert(await db.from('forma_credit_orders').select('*').eq('id',id).eq('owner_id',owner).maybeSingle());},
+  async reserveCreditOrder(owner,price,origin){const rows=assert(await db.rpc('forma_reserve_credit_order',{p_owner:owner,p_id:crypto.randomUUID(),p_price:price.id,p_origin:origin,p_expiry:Math.floor(Date.now()/1000)+3600}));return rows?.[0]??null;},
+  async attachCreditSession(order,id){assert(await db.from('forma_credit_orders').update({checkout_session_id:id}).eq('id',order.id).eq('owner_id',order.owner_id).eq('state','pending'));},
+  async expireCreditOrder(order){assert(await db.from('forma_credit_orders').update({state:'expired'}).eq('id',order.id).eq('owner_id',order.owner_id).eq('state','pending').eq('checkout_session_id',order.checkout_session_id));},
+  async completeCreditOrder(order,session){return assert(await db.rpc('forma_complete_credit_order',{p_owner:order.owner_id,p_id:order.id,p_session:session.id,p_amount:session.amount_total,p_currency:session.currency}));},
+  async unlockPortrait(row){return assert(await db.rpc('forma_unlock_portrait',{p_owner:row.owner_id,p_id:row.id,p_key:row.checkout_key,p_session:row.checkout_session_id}));},
   async generationRateAllowed(owner){return assert(await db.rpc('forma_generation_rate_allowed',{p_owner:owner}));},
   async generationRequest(owner,id){return assert(await db.from('forma_generation_requests').select('id,status,portrait_id,style,fingerprint,lease_until').eq('id',id).eq('owner_id',owner).maybeSingle());},
   async beginGeneration(owner,id,style,fingerprint,tokenHash){return assert(await db.rpc('forma_begin_generation',{p_owner:owner,p_id:id,p_style:style,p_fingerprint:fingerprint,p_token_hash:tokenHash}));},

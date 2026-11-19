@@ -2,7 +2,7 @@ import {imageConfiguration} from './image-provider.mjs';
 import {featureEnabled} from './features.mjs';
 import {response} from './access.mjs';
 
-const requiredFunctions=['forma_get_generation_allowance','forma_generation_rate_allowed','forma_begin_generation','forma_finish_generation','forma_publish_generation','forma_complete_purchase','forma_claim_portrait_delete','forma_reserve_checkout'];
+const requiredFunctions=['forma_get_credits','forma_reserve_credit_order','forma_complete_credit_order','forma_unlock_portrait','forma_get_generation_allowance','forma_generation_rate_allowed','forma_begin_generation','forma_finish_generation','forma_publish_generation','forma_complete_purchase','forma_claim_portrait_delete','forma_reserve_checkout'];
 
 // Read metadata only: never reserve allowance, generate images, or create payments.
 export async function probeDeployment({env=process.env,fetcher=fetch}={}){
@@ -10,7 +10,7 @@ export async function probeDeployment({env=process.env,fetcher=fetch}={}){
  if(!url||!key||!publicKey)return false;
  const image=imageConfiguration(env);
  if(featureEnabled('GENERATION_ENABLED',env)&&(image.invalid||!image.apiKey||!env.TURNSTILE_SECRET_KEY||!env.NEXT_PUBLIC_TURNSTILE_SITE_KEY||!(env.TURNSTILE_HOSTNAME||env.RENDER_EXTERNAL_HOSTNAME)))return false;
- if(featureEnabled('CHECKOUT_ENABLED',env)&&(!env.STRIPE_SECRET_KEY?.startsWith('sk_test_')||!env.STRIPE_PRICE_ID||!env.STRIPE_WEBHOOK_SECRET))return false;
+ if(featureEnabled('CHECKOUT_ENABLED',env)&&(!env.STRIPE_SECRET_KEY?.startsWith('sk_test_')||!env.STRIPE_PRICE_ID||!env.STRIPE_PACKAGE_PRICE_ID||!env.STRIPE_WEBHOOK_SECRET))return false;
  const origin=new URL(url).origin;
  const signal=AbortSignal.timeout(4000);
  const headers={apikey:key,Authorization:'Bearer '+key};

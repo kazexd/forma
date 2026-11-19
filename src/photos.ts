@@ -71,12 +71,12 @@ export async function downloadOriginal(id:string):Promise<void>{
  saveOriginalFile(await getOriginalFile(id));
 }
 
-export async function getGenerationAllowance():Promise<{remaining:number;limit:3}>{
+export async function getGenerationAllowance():Promise<{remaining:number;unlocks:number}>{
  const token=await getAccessToken();
  const response=await fetch('/api/generation-allowance',{headers:{Authorization:'Bearer '+token},cache:'no-store'});
  const data=await response.json();
  if(!response.ok)throw new Error(data.error||'Could not check your generation allowance.');
- if(data.limit!==3||!Number.isInteger(data.remaining)||data.remaining<0||data.remaining>3)throw new Error('Invalid generation allowance.');
+ if(!Number.isSafeInteger(data.remaining)||data.remaining<0||!Number.isSafeInteger(data.unlocks)||data.unlocks<0)throw new Error('Invalid generation allowance.');
  return data;
 }
 
@@ -99,4 +99,17 @@ export async function getGenerationRequest(id:string):Promise<GenerationRequestS
  if(!response.ok)throw new Error(payload.error||'Could not check generation status.');
  if(!payload.request||payload.request.id!==id||!['running','succeeded','failed','uncertain'].includes(payload.request.status))throw new Error('Invalid generation status.');
  return payload.request;
+}
+
+export async function unlockPortrait(id:string):Promise<void>{await portraitRequest(id,'/unlock','POST');}
+export async function buyCreditPackage():Promise<void>{
+ const token=await getAccessToken();const res=await fetch('/api/credit-packages/checkout',{method:'POST',headers:{Authorization:'Bearer '+token}});
+ const data=await res.json();if(!res.ok)throw new Error(data.error||'Could not start package checkout.');
+ if(data.paid===true)return;
+ const url=new URL(data.url);if(url.protocol!=='https:'||url.hostname!=='checkout.stripe.com')throw new Error('Invalid checkout destination.');window.location.assign(url.href);
+}
+export async function getPackageStatus(id:string):Promise<'pending'|'paid'|'expired'>{
+ const token=await getAccessToken();const res=await fetch('/api/credit-packages/'+encodeURIComponent(id),{headers:{Authorization:'Bearer '+token},cache:'no-store'});
+ const data=await res.json();if(!res.ok)throw new Error(data.error||'Could not confirm package payment.');
+ if(data.order?.id!==id||!['pending','paid','expired'].includes(data.order?.state))throw new Error('Invalid package status.');return data.order.state;
 }
