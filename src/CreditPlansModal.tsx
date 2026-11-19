@@ -34,7 +34,7 @@ export default function CreditPlansModal({remaining,unlocks,paymentMode,onClose,
   <section className="single-portrait-plan" aria-label="Single original"><div><strong>Just one original?</strong><p>{portraitPrice.label} CAD to unlock a specific photo. No generation attempts included.</p></div><a className="account-button" aria-disabled={busy||undefined} onClick={event=>{if(busy)event.preventDefault();}} href="/gallery">Choose in My Gallery</a></section>
   <p className="checkout-mode-note">{paymentMode==='live'?'Live checkout — real charges.':paymentMode==='test'?'Test checkout — no real charges.':'Checkout mode unavailable. Refresh your credits before paying.'}</p>
   <PurchasePolicies/>
-  <p className="plan-note">Accepted attempts count even if generation fails. Buying an original does not add attempts.</p>
+  <p className="plan-note">Delivered portraits use one attempt, even if you dislike the result. Confirmed technical failures restore your attempt. Buying an original does not add attempts.</p>
   {error&&<p role="alert" className="plans-error">{error}</p>}
   {onRefresh&&<button className="text-button" disabled={busy||refreshing} onClick={()=>void refresh()}>{refreshing?'Refreshing…':'Refresh credits'}</button>}
  </dialog>;

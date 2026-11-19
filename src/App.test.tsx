@@ -45,3 +45,10 @@ it('uses an unlock credit and replaces the result with the original without chec
  render(<App/>);await upload(5);fireEvent.click(screen.getByRole('button',{name:'Choose your style'}));fireEvent.click(screen.getByRole('checkbox'));fireEvent.click(screen.getByRole('button',{name:'Generate portrait'}));
  await screen.findByRole('button',{name:'Use 1 unlock credit'});fireEvent.click(screen.getByRole('button',{name:'Use 1 unlock credit'}));await screen.findByRole('button',{name:'Download original'});expect(unlock).toHaveBeenCalledWith(id);expect(buy).not.toHaveBeenCalled();expect(screen.getByRole('img',{name:'Business Casual AI portrait 1'})).toHaveAttribute('src','data:image/jpeg;base64,original');
 });
+
+it('recovers a confirmed technical failure and reports the restored attempt without resubmission',async()=>{
+ const id='11111111-1111-4111-8111-111111111111';sessionStorage.setItem('forma-generation:user-1',id);
+ vi.spyOn(api,'getGenerationRequest').mockResolvedValue({id,status:'failed',portraitId:null,attemptRestored:true});const generate=vi.spyOn(api,'generatePhotos');
+ render(<App/>);await screen.findByText('The previous attempt failed and your generation credit was restored. You can start a new attempt.');
+ expect(sessionStorage.getItem('forma-generation:user-1')).toBeNull();expect(generate).not.toHaveBeenCalled();expect(await screen.findByLabelText('3 generation attempts remaining')).toBeInTheDocument();
+});

@@ -19,21 +19,27 @@ export function createPortraitStore({url=process.env.NEXT_PUBLIC_SUPABASE_URL,ke
   async completeCreditOrder(order,session,receipt){return assert(await db.rpc('forma_complete_credit_order_discounted',{p_owner:order.owner_id,p_id:order.id,p_session:session.id,p_live:session.livemode,p_receipt:receipt}));},
   async unlockPortrait(row){return assert(await db.rpc('forma_unlock_portrait_mode',{p_owner:row.owner_id,p_id:row.id,p_key:row.checkout_key,p_session:row.checkout_session_id,p_live:billing.live}));},
   async generationRateAllowed(owner){return assert(await db.rpc('forma_generation_rate_allowed',{p_owner:owner}));},
-  async generationRequest(owner,id){return assert(await db.from('forma_generation_requests').select('id,status,portrait_id,style,fingerprint,lease_until').eq('id',id).eq('owner_id',owner).maybeSingle());},
+  async generationRequest(owner,id){return assert(await db.from('forma_generation_requests').select('id,status,portrait_id,style,fingerprint,lease_until,restored_at').eq('id',id).eq('owner_id',owner).maybeSingle());},
   async beginGeneration(owner,id,style,fingerprint,tokenHash){return assert(await db.rpc('forma_begin_generation_mode',{p_owner:owner,p_id:id,p_style:style,p_fingerprint:fingerprint,p_token_hash:tokenHash,p_live:billing.live}));},
-  async finishGeneration(owner,id,uncertain){assert(await db.rpc('forma_finish_generation',{p_owner:owner,p_id:id,p_uncertain:uncertain}));},
+  async finishGeneration(owner,id,uncertain){return assert(await db.rpc('forma_finish_generation_restoring',{p_owner:owner,p_id:id,p_uncertain:uncertain}));},
   async save(record,original,preview,requestId){
-   const paths=[];
+   const paths=[];let publishing=false,publishRejected=false;
    try{
     for(const [path,buffer] of [[record.original_path,original],[record.preview_path,preview]]){assert(await db.storage.from(bucket).upload(path,buffer,{contentType:'image/jpeg',upsert:false}));paths.push(path);}
     if(!requestId)throw new Error('A reserved generation request is required.');
-    assert(await db.rpc('forma_publish_generation',{p_owner:record.owner_id,p_id:requestId,p_original:record.original_path,p_preview:record.preview_path}));
+    publishing=true;
+    const result=await db.rpc('forma_publish_generation',{p_owner:record.owner_id,p_id:requestId,p_original:record.original_path,p_preview:record.preview_path});
+    // A concrete PostgreSQL error proves the publication transaction aborted.
+    publishRejected=!!result.error&&/^[0-9A-Z]{5}$/.test(result.error.code??'');
+    assert(result);
    }catch(error){
     // A lost RPC response may follow a committed transaction. Never delete its images.
-    const existing=await db.from('forma_portraits').select('id').eq('id',record.id).maybeSingle();
+    let existing;try{existing=await db.from('forma_portraits').select('id').eq('id',record.id).maybeSingle();}catch{existing={error:true};}
     if(!existing.error&&existing.data)return;
-    if(!existing.error&&paths.length)await db.storage.from(bucket).remove(paths);
-    throw error;
+    const uncertain=publishing&&!publishRejected;
+    // Preserve objects when publication may still commit after a lost response.
+    if(!uncertain&&paths.length){try{await db.storage.from(bucket).remove(paths);}catch{/* Orphans remain private and count toward storage capacity. */}}
+    const failure=new Error('Could not save the portrait.');failure.generationUncertain=uncertain;throw failure;
    }
   },
   async get(id){return assert(await db.from('forma_portraits').select('*').eq('id',id).maybeSingle());},

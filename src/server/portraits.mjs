@@ -50,8 +50,10 @@ export function createHandlers({configuration=imageConfiguration(),apiKey=config
   active=true;
   let files=[],accepted=false,requestId;
   async function attemptFailure(message,status,uncertain=false){
-   if(accepted){try{await store.finishGeneration(owner,requestId,uncertain);}catch{uncertain=true;}}
-   return json({error:message,code:accepted?(uncertain?'generation_uncertain':'generation_failed'):'generation_unavailable',requestId},status);
+   let restored=false;
+   if(accepted){try{const outcome=await store.finishGeneration(owner,requestId,uncertain);restored=outcome==='failed_restored';uncertain=!['failed_restored','failed_historical'].includes(outcome);}catch{uncertain=true;}}
+   const note=restored?' Your generation attempt has been restored.':uncertain?' Your attempt is held while we confirm the outcome. Check its status before starting another.':'';
+   return json({error:message+note,code:accepted?(uncertain?'generation_uncertain':'generation_failed'):'generation_unavailable',attemptRestored:restored,requestId},status);
   }
   async function replay(job){
    if(job.status==='succeeded'){
@@ -61,7 +63,7 @@ export function createHandlers({configuration=imageConfiguration(),apiKey=config
     const preview=await store.read(row.preview_path);
     return json({photos:[{id:row.id,previewUrl:`data:image/jpeg;base64,${preview.toString('base64')}`,downloadFilename:`forma-${row.style}-preview.jpg`,style:row.style,paid:false,watermarked:true,expiresAt:null}],requestId});
    }
-   return json({error:job.status==='failed'?'This attempt failed and was counted. Start a new attempt when ready.':'This attempt may still be processing. Check its status before starting another.',code:job.status==='failed'?'generation_failed':job.status==='uncertain'||Date.parse(job.lease_until)<=Date.now()?'generation_uncertain':'generation_in_progress',requestId},409);
+   return json({error:job.status==='failed'?(job.restored_at?'This attempt failed and its generation credit was restored. Start a new attempt when ready.':'This attempt failed. Check your remaining balance before starting another.'):'This attempt may still be processing. Check its status before starting another.',attemptRestored:!!job.restored_at,code:job.status==='failed'?'generation_failed':job.status==='uncertain'||Date.parse(job.lease_until)<=Date.now()?'generation_uncertain':'generation_in_progress',requestId},409);
   }
   try{
    requestId=request.headers.get('idempotency-key');
@@ -105,7 +107,7 @@ export function createHandlers({configuration=imageConfiguration(),apiKey=config
    const signal=AbortSignal.timeout(190_000);
    const response=await openai.images.edit({model,image:images,n:1,size:'1024x1536',quality:'medium',output_format:'jpeg',prompt:`Create ONE photorealistic professional head-and-shoulders portrait of the same person shown in all five reference photos. Use all references to preserve their recognizable identity, facial proportions, skin tone, age, hairstyle and natural skin texture. Do not blend identities, change ethnicity, reshape the face or apply heavy beauty retouching. The subject is facing the camera with a relaxed, confident expression. ${looks[style]} Realistic photographic detail, professional composition, no text, no watermark, no collage.`},{signal});
    const base64=response.data?.[0]?.b64_json;
-   if(typeof base64!=='string'||!base64||base64.length>28*1024*1024||!/^[A-Za-z0-9+/]+={0,2}$/.test(base64))return await attemptFailure('The image provider returned no valid portrait. This attempt was counted.',502);
+   if(typeof base64!=='string'||!base64||base64.length>28*1024*1024||!/^[A-Za-z0-9+/]+={0,2}$/.test(base64))return await attemptFailure('The image provider returned no valid portrait.',502);
    const id=requestId;
    const expiresAt=null;
    let original;
@@ -114,8 +116,10 @@ export function createHandlers({configuration=imageConfiguration(),apiKey=config
     original=await sharp(Buffer.from(base64,'base64'),{limitInputPixels:40_000_000,animated:false,failOn:'warning'}).rotate().jpeg({quality:95}).toBuffer();
     if(original.length>20*1024*1024)throw new Error('Portrait exceeds storage limit');
     preview=await watermarkPreview(original);
+   }catch{return await attemptFailure('The generated image could not be prepared for delivery.',502);}
+   try{
     await store.save({id,owner_id:owner,style,original_path:`${owner}/${id}/original.jpg`,preview_path:`${owner}/${id}/preview.jpg`,expires_at:expiresAt},original,preview,requestId);
-   }catch{return await attemptFailure('The portrait was generated but could not be saved securely. Do not regenerate immediately; check storage and API usage first.',503,true);}
+   }catch(error){return await attemptFailure('The portrait could not be saved securely. Do not regenerate until the attempt status is confirmed.',503,error.generationUncertain!==false);}
    return json({photos:[{id,previewUrl:`data:image/jpeg;base64,${preview.toString('base64')}`,downloadFilename:`forma-${style}-preview.jpg`,style,paid:false,watermarked:true,expiresAt}]});
   }catch(error){
    if(error instanceof VerificationError)return json({error:error.message,code:'human_verification_failed'},error.status);
@@ -136,7 +140,8 @@ export function createHandlers({configuration=imageConfiguration(),apiKey=config
    }
    if(error.status===400)return await attemptFailure('OpenAI could not process these photos. Try other clear photos or a different style.',422);
    if(['APIConnectionTimeoutError','APIUserAbortError','TimeoutError'].includes(error.name))return await attemptFailure('Generation timed out. No automatic retry was made; check usage before generating again.',504,true);
-   return await attemptFailure('Could not complete generation. Check your connection and try again. Requests are not retried automatically.',502,true);
+   if(Number.isInteger(error.status)&&error.status>=400&&error.status<=599)return await attemptFailure('The image provider could not complete generation. No portrait was delivered.',502);
+   return await attemptFailure('Could not confirm generation. Requests are not retried automatically.',502,true);
   }finally{active=false;for(const file of files)file.buffer=Buffer.alloc(0);}
  }
  return {GET,POST};

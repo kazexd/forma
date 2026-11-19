@@ -7,7 +7,7 @@ it('welcomes an eligible account and persists acknowledgement before closing',as
  const fetcher=vi.fn().mockResolvedValueOnce(Response.json({welcome:true})).mockResolvedValueOnce(Response.json({acknowledged:true}));vi.stubGlobal('fetch',fetcher);
  render(<AccountWelcome userId="new"/>);
  expect(await screen.findByRole('dialog',{name:'Welcome to Forma.'})).toBeInTheDocument();expect(screen.getByText('3 free generation attempts')).toBeInTheDocument();
- expect(screen.getByText(/Accepted attempts count even if generation fails/)).toBeInTheDocument();
+ expect(screen.getByText(/Confirmed technical failures restore your attempt/)).toBeInTheDocument();
  fireEvent.click(screen.getByRole('button',{name:'Let’s create your portrait'}));
  await waitFor(()=>expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
  expect(fetcher).toHaveBeenLastCalledWith('/api/account-welcome',expect.objectContaining({method:'POST',headers:{Authorization:'Bearer test-token'}}));

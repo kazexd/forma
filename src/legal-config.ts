@@ -1,7 +1,7 @@
 export const legalInfo={
  operator:'Zephyr Wong',
  location:'Ontario, Canada',
- email:'zephyrwong0114@gmail.com',
+ email:process.env.SUPPORT_EMAIL?.trim()||'forma.portraits@gmail.com',
  updated:'2026-11-19',
  updatedLabel:'November 19, 2026'
 } as const;

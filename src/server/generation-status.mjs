@@ -7,7 +7,7 @@ export function createGenerationStatus({store=createPortraitStore(),verify=creat
   const job=await store.generationRequest(user.id,id);
   if(!job)throw new AccessError('Generation request not found.',404);
   const status=job.status==='running'&&Date.parse(job.lease_until)<=now()?'uncertain':job.status;
-  return response({request:{id:job.id,status,portraitId:job.status==='succeeded'?job.portrait_id:null}});
+  return response({request:{id:job.id,status,portraitId:job.status==='succeeded'?job.portrait_id:null,attemptRestored:job.restored_at!=null}});
  }catch(error){return response({error:error instanceof AccessError?error.message:'Could not check generation status.'},error instanceof AccessError?error.status:503);}};
 }
 export const GET=createGenerationStatus();

@@ -93,7 +93,7 @@ export async function deletePortrait(id:string,paid:boolean):Promise<void>{
  if(!res.ok){const body=await res.json();throw new Error(body.error||'Could not delete your photo.');}
 }
 
-export interface GenerationRequestStatus{id:string;status:'running'|'succeeded'|'failed'|'uncertain';portraitId:string|null}
+export interface GenerationRequestStatus{id:string;status:'running'|'succeeded'|'failed'|'uncertain';portraitId:string|null;attemptRestored?:boolean}
 export async function getGenerationRequest(id:string):Promise<GenerationRequestStatus>{
  const token=await getAccessToken();const response=await fetch('/api/generation-requests/'+encodeURIComponent(id),{headers:{Authorization:'Bearer '+token},cache:'no-store'});const payload=await response.json();
  if(!response.ok)throw new Error(payload.error||'Could not check generation status.');

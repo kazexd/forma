@@ -39,7 +39,7 @@ export default function AccountWelcome({userId,home=true}:{userId:string;home?:b
    <li><Images size={20} aria-hidden="true"/><div><strong>Preview free. Keep your favourites.</strong><p>View watermarked results in your private My Gallery. Your portraits stay there until you delete them.</p></div></li>
    <li><KeyRound size={20} aria-hidden="true"/><div><strong>Unlock when you love it.</strong><p>Buy an original or use an unlock credit to download and share it without the watermark.</p></div></li>
   </ul>
-  <p className="welcome-note">Accepted attempts count even if generation fails. Free attempts do not reset daily. AI results may vary.</p>
+  <p className="welcome-note">Delivered portraits use one attempt, even if you dislike the result. Confirmed technical failures restore your attempt. Free attempts do not reset daily.</p>
   {error&&<p role="alert">{error}</p>}
   <button className="primary" disabled={busy} onClick={()=>void dismiss()} autoFocus>{busy?'Getting ready…':"Let’s create your portrait"}</button>
  </dialog>;

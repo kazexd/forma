@@ -38,5 +38,5 @@ jobs:
       - run: npm ci
       - run: npm test
       - name: Check database transactions and concurrency
-        run: python3 scripts/test-package-options-db.py ${{ job.services.postgres.id }}
+        run: python3 scripts/test-generation-restoration-db.py ${{ job.services.postgres.id }}
       - run: npm run build
