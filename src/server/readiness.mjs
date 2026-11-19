@@ -3,7 +3,7 @@ import {imageConfiguration} from './image-provider.mjs';
 import {featureEnabled} from './features.mjs';
 import {response,applicationOrigin} from './access.mjs';
 
-const requiredFunctions=['forma_get_credits','forma_reserve_credit_order_mode','forma_complete_credit_order_mode','forma_unlock_portrait_mode','forma_get_generation_allowance','forma_generation_rate_allowed','forma_begin_generation_mode','forma_finish_generation','forma_publish_generation','forma_complete_purchase_mode','forma_claim_portrait_delete','forma_reserve_checkout_mode'];
+const requiredFunctions=['forma_get_credits','forma_reserve_credit_order_cad','forma_complete_credit_order_mode','forma_unlock_portrait_mode','forma_get_generation_allowance','forma_generation_rate_allowed','forma_begin_generation_mode','forma_finish_generation','forma_publish_generation','forma_complete_purchase_mode','forma_claim_portrait_delete','forma_reserve_checkout_mode'];
 
 // Read metadata only: never reserve allowance, generate images, or create payments.
 export async function probeDeployment({env=process.env,fetcher=fetch}={}){

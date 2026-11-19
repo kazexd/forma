@@ -19,7 +19,7 @@ describe('deployment safety defaults',()=>{
  });
 });
 
-const functions=['forma_get_credits','forma_reserve_credit_order_mode','forma_complete_credit_order_mode','forma_unlock_portrait_mode','forma_get_generation_allowance','forma_generation_rate_allowed','forma_begin_generation_mode','forma_finish_generation','forma_publish_generation','forma_complete_purchase_mode','forma_claim_portrait_delete','forma_reserve_checkout_mode'];
+const functions=['forma_get_credits','forma_reserve_credit_order_cad','forma_complete_credit_order_mode','forma_unlock_portrait_mode','forma_get_generation_allowance','forma_generation_rate_allowed','forma_begin_generation_mode','forma_finish_generation','forma_publish_generation','forma_complete_purchase_mode','forma_claim_portrait_delete','forma_reserve_checkout_mode'];
 const env={NODE_ENV:'production',NEXT_PUBLIC_SUPABASE_URL:'https://example.supabase.co',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'public-test',SUPABASE_SERVICE_ROLE_KEY:'server-test'};
 function fetchFixture({publicBucket=false,missingFunction=false,google=true,tableStatus=200}={}){
  return vi.fn(async(url,options)=>{

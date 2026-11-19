@@ -7,7 +7,7 @@ it('shows accumulated balances and offers a repeatable fixed-price package',asyn
  const buy=vi.spyOn(api,'buyCreditPackage').mockResolvedValue(),refresh=vi.fn().mockResolvedValue(undefined);
  render(<CreditWallet remaining={13} unlocks={4} onRefresh={refresh}/>);
  expect(screen.getByText(/13 generation attempts remaining/)).toHaveTextContent('4 original unlock credits');
- const button=screen.getByRole('button',{name:/Buy 5 attempts \+ 2 unlocks — US\$5.49/});
+ const button=screen.getByRole('button',{name:/Buy 5 attempts \+ 2 unlocks — CA\$5.49/});
  fireEvent.click(button);await waitFor(()=>expect(refresh).toHaveBeenCalledTimes(1));fireEvent.click(button);await waitFor(()=>expect(buy).toHaveBeenCalledTimes(2));
 });
 it('blocks duplicate submissions while checkout is pending',async()=>{

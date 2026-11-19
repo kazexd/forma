@@ -47,7 +47,7 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   if(row.payment_state==='paid')throw new AccessError('This portrait is already purchased. Download the original instead.',409);
   if(!stripe||!priceId||!webhookSecret)throw new AccessError('Checkout is not configured yet. Matching Stripe price and webhook settings are required.',503);
   if(row.checkout_session_id){const session=await stripe.checkout.sessions.retrieve(row.checkout_session_id);checkSessionMode(session);if(session.status==='open'&&session.url){if(row.price_amount!==portraitPrice.amount||row.price_currency!==portraitPrice.currency){await stripe.checkout.sessions.expire(session.id);throw new AccessError('The price has changed. Refresh purchase status and try again.',409);}return response({url:session.url});}if(session.status!=='expired')throw new AccessError('Payment confirmation is pending. Refresh the portrait status shortly.',409);await store.clearCheckout(row);row=await store.get(id);}
-  if(!row.checkout_key){const price=await configuredPrice(priceId,'STRIPE_PRICE_ID');if(price.livemode!==live||!price.active||price.type!=='one_time'||price.unit_amount!==portraitPrice.amount||price.currency!==portraitPrice.currency)throw new AccessError(`Configure an active, one-time Stripe ${billing.mode} price of US$3.99 (USD).`,503);row=await store.reserveCheckout(row,price,origin);if(!row)throw new AccessError('This portrait is no longer available for checkout. Refresh its status.',409);}
+  if(!row.checkout_key){const price=await configuredPrice(priceId,'STRIPE_PRICE_ID');if(price.livemode!==live||!price.active||price.type!=='one_time'||price.unit_amount!==portraitPrice.amount||price.currency!==portraitPrice.currency)throw new AccessError(`Configure an active, one-time Stripe ${billing.mode} price of CA$3.99 (CAD).`,503);row=await store.reserveCheckout(row,price,origin);if(!row)throw new AccessError('This portrait is no longer available for checkout. Refresh its status.',409);}
   if(row.stripe_livemode!==live)throw new AccessError('Checkout belongs to a different payment mode.',409);
   if(row.price_amount!==portraitPrice.amount||row.price_currency!==portraitPrice.currency)throw new AccessError('This checkout has a different price. Refresh or contact support before paying.',409);
   const session=await stripe.checkout.sessions.create(sessionOptions(row),{idempotencyKey:`portrait-v2-${row.checkout_key}`});
@@ -60,7 +60,7 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   if(!id||!owner)return false;
   const order=await store.creditOrder(owner,id);if(!order)throw new Error('Package order missing');
   if(order.stripe_livemode!==live)throw new Error('Package mode mismatch');
-  if(session.client_reference_id!==order.id||(order.checkout_session_id&&order.checkout_session_id!==session.id)||session.amount_total!==packagePrice.amount||session.amount_total!==order.price_amount||session.currency!==packagePrice.currency||session.currency!==order.price_currency)throw new Error('Package payment mismatch');
+  if(session.client_reference_id!==order.id||(order.checkout_session_id&&order.checkout_session_id!==session.id)||session.amount_total!==packagePrice.amount||session.amount_total!==order.price_amount||session.currency!==order.price_currency)throw new Error('Package payment mismatch');
   if(!await store.completeCreditOrder(order,session))throw new Error('Package payment could not be recorded');
   return true;
  }
@@ -69,17 +69,26 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
   const user=await verify(request);if(!store)throw new AccessError('Credit storage is not configured.',503);await assertMode();
   if(!stripe||!packagePriceId||!webhookSecret)throw new AccessError('Package checkout is not configured. A matching Stripe package price is required.',503);
   stage='price_lookup';const price=await configuredPrice(packagePriceId,'STRIPE_PACKAGE_PRICE_ID');
-  if(price.livemode!==live||!price.active||price.type!=='one_time'||price.unit_amount!==packagePrice.amount||price.currency!==packagePrice.currency)throw new AccessError(`Configure an active, one-time Stripe ${billing.mode} price of US$5.49 (USD).`,503);
+  if(price.livemode!==live||!price.active||price.type!=='one_time'||price.unit_amount!==packagePrice.amount||price.currency!==packagePrice.currency)throw new AccessError(`Configure an active, one-time Stripe ${billing.mode} price of CA$5.49 (CAD).`,503);
   stage='order_reservation';const order=await store.reserveCreditOrder(user.id,price,origin);if(!order)throw new Error('Could not reserve package order');
   if(order.stripe_livemode!==live)throw new AccessError('Package belongs to a different payment mode.',409);
   if(order.checkout_session_id){
    stage='session_lookup';const session=await stripe.checkout.sessions.retrieve(order.checkout_session_id);checkSessionMode(session);
    if(session.id!==order.checkout_session_id||session.metadata?.order_id!==order.id||session.metadata?.owner_id!==user.id)throw new Error('Package checkout mismatch');
    stage='payment_reconciliation';if(await fulfill(session))return response({paid:true,orderId:order.id});
-   if(session.status==='open'&&session.url)return response({url:session.url});
+   if(session.status==='open'&&session.url){
+    if(order.price_currency!==packagePrice.currency||order.price_amount!==packagePrice.amount){
+     const expired=await stripe.checkout.sessions.expire(session.id);checkSessionMode(expired);
+     if(await fulfill(expired))return response({paid:true,orderId:order.id});
+     if(expired.id!==session.id||expired.status!=='expired'||expired.payment_status!=='unpaid')throw new AccessError('Previous package payment is unresolved. Refresh before buying again.',409);
+     await store.expireCreditOrder(order);throw new AccessError('Package pricing has changed to CAD. The old checkout was cancelled; try again to start a CAD checkout.',409);
+    }
+    return response({url:session.url});
+   }
    if(session.status==='expired'&&session.payment_status==='unpaid'){await store.expireCreditOrder(order);throw new AccessError('The previous package checkout expired. Please try again to start a new checkout.',409);}
    throw new AccessError('Package payment is processing. Refresh its status before buying again.',409);
   }
+  if(order.price_currency!==packagePrice.currency||order.price_amount!==packagePrice.amount)throw new AccessError('A previous package checkout uses different pricing and needs reconciliation. Contact support before paying.',409);
   // Never recreate a session after Stripe may have discarded its idempotency key.
   if(order.checkout_expires_at<Math.floor(Date.now()/1000)+1800)throw new AccessError('This package checkout needs reconciliation. Contact support before buying again.',409);
   stage='session_creation';const session=await stripe.checkout.sessions.create({mode:'payment',line_items:[{price:order.price_id,quantity:1}],client_reference_id:order.id,metadata:{kind:'credit_package',order_id:order.id,owner_id:user.id},success_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=success`,cancel_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=cancelled`,expires_at:order.checkout_expires_at},{idempotencyKey:'credit-package-v1-'+order.id});
