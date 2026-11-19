@@ -144,3 +144,7 @@ it('normalizes non-JPEG model output to a private JPEG and watermarked preview',
  const result=await submit(setup({provider:'openrouter',client,store}));expect(result.status).toBe(200);
  const [,original,preview]=store.save.mock.calls[0];expect((await sharp(original).metadata()).format).toBe('jpeg');expect((await sharp(preview).metadata()).format).toBe('jpeg');expect(result.body.photos[0].watermarked).toBe(true);
 });
+it('accepts generation from the trusted public origin behind Render while keeping allowance protection',async()=>{
+ vi.stubEnv('APP_ORIGIN','https://forma-production.onrender.com');
+ try{const store=fakeStore();store.beginGeneration.mockResolvedValue('allowance_exhausted');const client=fakeClient();const res=await submit(setup({store,client}),{headers:{Origin:'https://forma-production.onrender.com','sec-fetch-site':'same-origin'}});expect(res.status).toBe(429);expect(res.body.code).toBe('generation_allowance_exhausted');expect(client.images.edit).not.toHaveBeenCalled();}finally{vi.unstubAllEnvs();}
+});

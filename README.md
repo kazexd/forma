@@ -247,3 +247,7 @@ There is no automatic cross-provider failover or request retry. OpenRouter endpo
 Keep generation and checkout closed during configuration changes. Readiness checks selected-provider configuration only, not key validity, credit balance or model availability. Verify with mocked tests first, then one deliberate paid generation. Do not automatically rerun an uncertain attempt with the other provider.
 
 Reference: [OpenRouter Image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation).
+
+### Public origin behind a reverse proxy
+
+Generation, checkout, credit redemption and deletion share the same origin verifier. It uses server-only `APP_ORIGIN` when set, otherwise Render's automatic `RENDER_EXTERNAL_URL`, then HTTPS plus `RENDER_EXTERNAL_HOSTNAME`. This accepts the real browser HTTPS origin even when Next.js sees an internal HTTP/localhost request URL. Checkout success/cancel URLs use that trusted public origin as well. Other origins and `Sec-Fetch-Site: cross-site` remain rejected; Host and forwarded headers never expand the allowlist. Custom-domain deployments must set `APP_ORIGIN=https://your-domain` (no credentials, path, query or fragment). Invalid configured origins fail closed and fail readiness. Local development without these variables preserves localhost/127.0.0.1 port 5173 compatibility. Source: https://render.com/docs/environment-variables .

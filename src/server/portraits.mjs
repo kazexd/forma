@@ -8,6 +8,7 @@ import {createClient} from '@supabase/supabase-js';
 import {parseUpload,UploadError} from './uploads.mjs';
 import {createPortraitStore} from './portrait-store.mjs';
 import {watermarkPreview} from './watermark.mjs';
+import {checkOrigin,AccessError} from './access.mjs';
 
 const looks={
  formal:'Tailored dark business suit with a simple neutral shirt, understated gray studio backdrop, elegant studio lighting.',
@@ -27,15 +28,7 @@ export function createHandlers({configuration=imageConfiguration(),apiKey=config
  async function GET(){return json({configured:Boolean(apiKey||client),authConfigured:Boolean(auth)});}
  async function POST(request){
   if(!generationEnabled)return fail('Portrait generation is temporarily unavailable. Please try again later.',503);
-  const origin=request.headers.get('origin');
-  const requestUrl=new URL(request.url);
-  const allowedOrigins=new Set([requestUrl.origin]);
-  // Next may normalize a loopback URL to localhost internally, even when the
-  // browser uses 127.0.0.1. Both existing OAuth origins must continue to work.
-  if(['localhost','127.0.0.1'].includes(requestUrl.hostname)){
-   allowedOrigins.add('http://localhost:5173');allowedOrigins.add('http://127.0.0.1:5173');
-  }
-  if((origin&&!allowedOrigins.has(origin))||request.headers.get('sec-fetch-site')==='cross-site')return fail('Cross-site requests are not allowed.',403);
+  try{checkOrigin(request);}catch(error){return fail(error instanceof AccessError?error.message:'Could not verify request origin.',error instanceof AccessError?error.status:503);}
   if(!auth)return fail('Google sign-in is not configured. Set the Supabase environment variables and restart the app.',503);
   const match=/^Bearer ([^\s]+)$/i.exec(request.headers.get('authorization')??'');
   if(!match)return fail('Please sign in with Google before generating a portrait.',401);

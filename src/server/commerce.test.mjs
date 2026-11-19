@@ -195,3 +195,13 @@ it('reports a safe package checkout stage and reference for unknown storage erro
  const res=await app.packageCheckout(request('POST'));const body=await res.json();expect(res.status).toBe(503);expect(body.code).toBe('package_checkout_unavailable');expect(body.reference).toMatch(/^[0-9a-f-]{36}$/);
  const log=logger.mock.calls[0][0];expect(log).toContain('order_reservation');expect(log).toContain('42501');expect(log).toContain(body.reference);expect(log).not.toContain('private');expect(log).not.toContain('secret');expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
 });
+it('accepts package checkout through a Render reverse proxy and saves the public redirect origin',async()=>{
+ vi.stubEnv('APP_ORIGIN','https://forma-production.onrender.com');
+ try{
+  const {app,stripe,store}=setup({packagePriceId:'price_package'});
+  stripe.prices.retrieve.mockResolvedValue({id:'price_package',livemode:false,active:true,type:'one_time',unit_amount:549,currency:'usd'});
+  store.reserveCreditOrder=vi.fn().mockResolvedValue({id:'22222222-2222-4222-8222-222222222222',owner_id:'owner',price_id:'price_package',checkout_origin:'https://forma-production.onrender.com',checkout_expires_at:Math.floor(Date.now()/1000)+3600});store.attachCreditSession=vi.fn();
+  const res=await app.packageCheckout(new Request('http://localhost:10000/api/credit-packages/checkout',{method:'POST',headers:{Origin:'https://forma-production.onrender.com','sec-fetch-site':'same-origin'}}));
+  expect(res.status).toBe(200);expect(store.reserveCreditOrder).toHaveBeenCalledWith('owner',expect.anything(),'https://forma-production.onrender.com');expect(stripe.checkout.sessions.create.mock.calls[0][0].success_url).toMatch(/^https:\/\/forma-production\.onrender\.com\/gallery/);
+ }finally{vi.unstubAllEnvs();}
+});
