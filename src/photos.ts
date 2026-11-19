@@ -102,8 +102,8 @@ export async function getGenerationRequest(id:string):Promise<GenerationRequestS
 }
 
 export async function unlockPortrait(id:string):Promise<void>{await portraitRequest(id,'/unlock','POST');}
-export async function buyCreditPackage():Promise<void>{
- const token=await getAccessToken();const res=await fetch('/api/credit-packages/checkout',{method:'POST',headers:{Authorization:'Bearer '+token}});
+export async function buyCreditPackage(plan:'starter'|'plus'='plus'):Promise<void>{
+ const token=await getAccessToken();const res=await fetch('/api/credit-packages/checkout',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({package:plan})});
  const data=await res.json();if(!res.ok)throw new Error(data.error||'Could not start package checkout.');
  if(data.paid===true)return;
  const url=new URL(data.url);if(url.protocol!=='https:'||url.hostname!=='checkout.stripe.com')throw new Error('Invalid checkout destination.');window.location.assign(url.href);

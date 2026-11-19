@@ -90,3 +90,6 @@ button.header-credits:hover{background:#e9ede3;border-color:#d7dfcf}
 .single-portrait-plan .account-button{flex-shrink:0;text-align:center}.single-portrait-plan [aria-disabled=true]{opacity:.45}
 .plans-error{color:#a14027;font-size:12px;line-height:1.7}
 @media(max-width:600px){.credit-plans-dialog{padding:30px 22px 22px}.credit-plans-dialog h2{font-size:28px}.credit-package-card{padding:20px}.single-portrait-plan{align-items:flex-start;flex-direction:column}button.header-credits{padding:8px 2px}}
+
+.credit-plans-dialog{max-width:min(760px,94vw)}.credit-package-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.credit-package-card{padding:20px;background:#fafbf7;border-color:#dce2d4}.credit-package-card.package-plus{background:#edf1e7;border-color:#bdcbb3}.credit-package-card li{align-items:flex-start;line-height:1.5}.credit-package-card li svg{margin-top:2px}.credit-package-card .primary{padding:12px;gap:6px;line-height:1.6}
+@media(max-width:600px){.credit-package-options{grid-template-columns:1fr}.credit-package-card{padding:20px}.credit-package-card ul{margin:14px 0 18px;gap:9px}.plan-price{font-size:32px;margin:10px 0}}

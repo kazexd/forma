@@ -13,5 +13,5 @@ it('reconciles a paid package and refreshes balances',async()=>{
  const id='11111111-1111-4111-8111-111111111111';window.history.replaceState(null,'','/gallery?package='+id);
  vi.spyOn(api,'getPackageStatus').mockResolvedValue('paid');const refresh=vi.fn().mockResolvedValue(undefined);
  render(<PackagePaymentStatus onRefresh={refresh}/>);
- await screen.findByText(/5 generation attempts and 2 unlock credits have been added/);expect(refresh).toHaveBeenCalled();
+ await screen.findByText(/Your package credits have been added/);expect(refresh).toHaveBeenCalled();
 });

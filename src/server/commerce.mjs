@@ -2,13 +2,13 @@ import {checkoutReceipt} from './checkout-receipt.mjs';
 import {stripeConfiguration} from './stripe-config.mjs';
 import {featureEnabled} from './features.mjs';
 import sharp from 'sharp';
-import {portraitPrice,packagePrice} from '../portrait-price.mjs';
+import {portraitPrice,creditPackages} from '../portrait-price.mjs';
 import Stripe from 'stripe';
 import {randomUUID} from 'node:crypto';
 import {createPortraitStore} from './portrait-store.mjs';
 import {createVerifier,checkOrigin,validId,AccessError,response} from './access.mjs';
 
-export function createCommerce({store=createPortraitStore(),verify=createVerifier(),stripeKey=process.env.STRIPE_SECRET_KEY,priceId=process.env.STRIPE_PRICE_ID,packagePriceId=process.env.STRIPE_PACKAGE_PRICE_ID,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET,stripeClient,stripeMode=process.env.STRIPE_MODE??'test',checkoutEnabled=featureEnabled('CHECKOUT_ENABLED'),logger=console.error}={}){
+export function createCommerce({store=createPortraitStore(),verify=createVerifier(),stripeKey=process.env.STRIPE_SECRET_KEY,priceId=process.env.STRIPE_PRICE_ID,packagePriceId=process.env.STRIPE_PACKAGE_PRICE_ID,starterPackagePriceId=process.env.STRIPE_STARTER_PACKAGE_PRICE_ID,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET,stripeClient,stripeMode=process.env.STRIPE_MODE??'test',checkoutEnabled=featureEnabled('CHECKOUT_ENABLED'),logger=console.error}={}){
  const billing=stripeConfiguration({STRIPE_MODE:stripeMode,STRIPE_SECRET_KEY:stripeKey});
  const stripe=billing.valid?(stripeClient??(billing.keyValid?new Stripe(stripeKey,{maxNetworkRetries:0,timeout:15000}):null)):null;
  const live=billing.live;
@@ -71,17 +71,23 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
  async function packageCheckout(request){let stage='validate';try{
   const origin=checkOrigin(request);if(!checkoutEnabled)throw new AccessError('Checkout is temporarily unavailable. Please try again later.',503);
   const user=await verify(request);if(!store)throw new AccessError('Credit storage is not configured.',503);await assertMode();
-  if(!stripe||!packagePriceId||!webhookSecret)throw new AccessError('Package checkout is not configured. A matching Stripe package price is required.',503);
-  stage='price_lookup';const price=await configuredPrice(packagePriceId,'STRIPE_PACKAGE_PRICE_ID');
-  if(price.livemode!==live||!price.active||price.type!=='one_time'||price.unit_amount!==packagePrice.amount||price.currency!==packagePrice.currency)throw new AccessError(`Configure an active, one-time Stripe ${billing.mode} price of CA$5.49 (CAD).`,503);
-  stage='order_reservation';const order=await store.reserveCreditOrder(user.id,price,origin);if(!order)throw new Error('Could not reserve package order');
+  let selected='plus';
+  if(request.body){try{const input=await request.json();if(!input||typeof input!=='object'||Array.isArray(input)||typeof input.package!=='string')throw new Error();selected=input.package;}catch{throw new AccessError('Choose a valid credit package.',400);}}
+  const plan=creditPackages.find(p=>p.id===selected);if(!plan)throw new AccessError('Choose a valid credit package.',400);
+  const selectedPriceId=plan.id==='starter'?starterPackagePriceId:packagePriceId;
+  const setting=plan.id==='starter'?'STRIPE_STARTER_PACKAGE_PRICE_ID':'STRIPE_PACKAGE_PRICE_ID';
+  if(!stripe||!selectedPriceId||!webhookSecret)throw new AccessError('This package checkout is not configured yet. Please choose another package or contact support.',503);
+  stage='price_lookup';const price=await configuredPrice(selectedPriceId,setting);
+  if(price.livemode!==live||!price.active||price.type!=='one_time'||price.unit_amount!==plan.amount||price.currency!==plan.currency)throw new AccessError(`Configure an active, one-time Stripe ${billing.mode} price of ${plan.label} (CAD).`,503);
+  stage='order_reservation';const order=await store.reserveCreditOrder(user.id,price,origin,plan.id);if(!order)throw new Error('Could not reserve package order');
+  if((order.package_code??'plus')!==plan.id)throw new AccessError('Reserved checkout does not match the selected package.',409);
   if(order.stripe_livemode!==live)throw new AccessError('Package belongs to a different payment mode.',409);
   if(order.checkout_session_id){
    stage='session_lookup';const session=await retrieveCheckout(order.checkout_session_id);checkSessionMode(session);
    if(session.id!==order.checkout_session_id||session.metadata?.order_id!==order.id||session.metadata?.owner_id!==user.id)throw new Error('Package checkout mismatch');
    stage='payment_reconciliation';if(await fulfill(session))return response({paid:true,orderId:order.id});
    if(session.status==='open'&&session.url){
-    if(order.price_currency!==packagePrice.currency||order.price_amount!==packagePrice.amount){
+    if(order.price_currency!==plan.currency||order.price_amount!==plan.amount){
      const expired=await stripe.checkout.sessions.expire(session.id);checkSessionMode(expired);
      if(await fulfill(expired))return response({paid:true,orderId:order.id});
      if(expired.id!==session.id||expired.status!=='expired'||expired.payment_status!=='unpaid')throw new AccessError('Previous package payment is unresolved. Refresh before buying again.',409);
@@ -92,7 +98,7 @@ export function createCommerce({store=createPortraitStore(),verify=createVerifie
    if(session.status==='expired'&&session.payment_status==='unpaid'){await store.expireCreditOrder(order);throw new AccessError('The previous package checkout expired. Please try again to start a new checkout.',409);}
    throw new AccessError('Package payment is processing. Refresh its status before buying again.',409);
   }
-  if(order.price_currency!==packagePrice.currency||order.price_amount!==packagePrice.amount)throw new AccessError('A previous package checkout uses different pricing and needs reconciliation. Contact support before paying.',409);
+  if(order.price_currency!==plan.currency||order.price_amount!==plan.amount)throw new AccessError('A previous package checkout uses different pricing and needs reconciliation. Contact support before paying.',409);
   // Never recreate a session after Stripe may have discarded its idempotency key.
   if(order.checkout_expires_at<Math.floor(Date.now()/1000)+1800)throw new AccessError('This package checkout needs reconciliation. Contact support before buying again.',409);
   stage='session_creation';const session=await stripe.checkout.sessions.create({mode:'payment',...(order.promotions_enabled===true?{allow_promotion_codes:true}:{}),line_items:[{price:order.price_id,quantity:1}],client_reference_id:order.id,metadata:{kind:'credit_package',order_id:order.id,owner_id:user.id},success_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=success`,cancel_url:`${order.checkout_origin}/gallery?package=${order.id}&package_checkout=cancelled`,expires_at:order.checkout_expires_at},{idempotencyKey:'credit-package-v1-'+order.id});

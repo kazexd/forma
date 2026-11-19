@@ -17,17 +17,23 @@ it('prevents duplicate checkout submissions and closing while checkout starts',a
  render(<Header auth={auth} current="gallery" remaining={1} unlocks={0} paymentMode="live"/>);fireEvent.click(screen.getByRole('button',{name:/view purchase options/}));
  expect(screen.getByText(/Live checkout — real charges/)).toBeInTheDocument();
  fireEvent.click(screen.getByRole('button',{name:'Buy credit package — CA$5.49 CAD'}));expect(screen.getByRole('button',{name:'Opening checkout…'})).toBeDisabled();expect(screen.getByRole('button',{name:'Close purchase options'})).toBeDisabled();expect(buy).toHaveBeenCalledTimes(1);
- finish();await waitFor(()=>expect(screen.getByRole('button',{name:/Buy credit package/})).toBeEnabled());
+ finish();await waitFor(()=>expect(screen.getByRole('button',{name:'Buy credit package — CA$5.49 CAD'})).toBeEnabled());
 });
 it('shows checkout errors and allows retry',async()=>{
- const buy=vi.spyOn(api,'buyCreditPackage').mockRejectedValueOnce(new Error('Checkout is unavailable')).mockResolvedValue();render(<Header auth={auth} current="create" paymentMode="test"/>);fireEvent.click(screen.getByRole('button',{name:/view purchase options/}));fireEvent.click(screen.getByRole('button',{name:/Buy credit package/}));
- expect(await screen.findByRole('alert')).toHaveTextContent('Checkout is unavailable');fireEvent.click(screen.getByRole('button',{name:/Buy credit package/}));await waitFor(()=>expect(buy).toHaveBeenCalledTimes(2));
+ const buy=vi.spyOn(api,'buyCreditPackage').mockRejectedValueOnce(new Error('Checkout is unavailable')).mockResolvedValue();render(<Header auth={auth} current="create" paymentMode="test"/>);fireEvent.click(screen.getByRole('button',{name:/view purchase options/}));fireEvent.click(screen.getByRole('button',{name:'Buy credit package — CA$5.49 CAD'}));
+ expect(await screen.findByRole('alert')).toHaveTextContent('Checkout is unavailable');fireEvent.click(screen.getByRole('button',{name:'Buy credit package — CA$5.49 CAD'}));await waitFor(()=>expect(buy).toHaveBeenCalledTimes(2));
 });
 it('refreshes balances and prevents purchase with unknown payment mode',async()=>{
- const refresh=vi.fn().mockResolvedValue(undefined);render(<Header auth={auth} current="gallery" onRefreshCredits={refresh}/>);fireEvent.click(screen.getByRole('button',{name:/view purchase options/}));expect(screen.getByRole('button',{name:/Buy credit package/})).toBeDisabled();fireEvent.click(screen.getByRole('button',{name:'Refresh credits'}));await waitFor(()=>expect(refresh).toHaveBeenCalledOnce());
+ const refresh=vi.fn().mockResolvedValue(undefined);render(<Header auth={auth} current="gallery" onRefreshCredits={refresh}/>);fireEvent.click(screen.getByRole('button',{name:/view purchase options/}));expect(screen.getByRole('button',{name:'Buy credit package — CA$5.49 CAD'})).toBeDisabled();fireEvent.click(screen.getByRole('button',{name:'Refresh credits'}));await waitFor(()=>expect(refresh).toHaveBeenCalledOnce());
 });
 it('removes the modal on account switch and hides balances after sign-out',()=>{
  const {rerender}=render(<Header auth={auth} current="create" paymentMode="test"/>);fireEvent.click(screen.getByRole('button',{name:/view purchase options/}));
  rerender(<Header auth={{...auth,user:{...auth.user!,id:'other'}}} current="create"/>);expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
  rerender(<Header auth={{...auth,user:null}} current="create"/>);expect(screen.queryByRole('button',{name:/view purchase options/})).not.toBeInTheDocument();
+});
+
+it('offers the starter plan and submits its code rather than the plus plan',async()=>{
+ const buy=vi.spyOn(api,'buyCreditPackage').mockResolvedValue();render(<Header auth={auth} current="create" paymentMode="test"/>);fireEvent.click(screen.getByRole('button',{name:/view purchase options/}));
+ expect(screen.getByText('3 generation attempts')).toBeInTheDocument();expect(screen.getByText('1 watermark-free original unlock')).toBeInTheDocument();
+ fireEvent.click(screen.getByRole('button',{name:'Buy credit package — CA$4.49 CAD'}));await waitFor(()=>expect(buy).toHaveBeenCalledWith('starter'));
 });

@@ -327,3 +327,14 @@ Run `python scripts/test-promotions-db.py <disposable-postgres-container>` again
 ### New-account welcome
 
 Apply `supabase/migrations/20261119_new_account_welcome.sql` before deploying this UI. A private, service-only table records welcome eligibility for accounts created after this migration; existing accounts are not enrolled. The auth insert trigger only records onboarding state and never grants or resets credits. New users signing in from My Gallery return to the home page. The accessible welcome dialog introduces the existing 3 free attempts, five-photo requirement, watermarked Gallery and optional original unlocks. Closing or continuing acknowledges it on the server, so it stays dismissed across browsers and later logins. It cannot be dismissed successfully until acknowledgement saves; network errors offer retry. Missing welcome configuration does not block the main app. No uploaded photos, auth tokens or welcome decisions are stored in browser local storage.
+
+
+### Two credit packages
+
+New purchases offer Starter at CA$4.49 CAD (3 generation attempts + 1 original unlock) and Plus at CA$5.49 CAD (5 attempts + 2 unlocks). Both are repeatable one-time purchases; balances accumulate. Single-photo unlocks remain CA$3.99 CAD.
+
+Pause the app and payment processing, then apply `supabase/migrations/20261119_credit_package_options.sql` AFTER all previous migrations, including welcome and promotions. Deploy the matching application before resuming. It preserves existing balances, USD/CAD orders, Stripe session/idempotency parameters and discount receipts. Existing orders are backfilled as Plus (5+2) without replaying payments. New orders store their package code and credit quantities; transactional fulfillment grants that saved snapshot exactly once. Each account may have one pending checkout per package, so choosing Starter never silently reuses a Plus checkout. The old reservation RPC is no longer executable by the backend role.
+
+Create a separate one-time Stripe Price of 449 cents in CAD and set server-only `STRIPE_STARTER_PACKAGE_PRICE_ID` in the matching sandbox/local or Live/Render environment. Keep `STRIPE_PACKAGE_PRICE_ID` for the existing 549-cent Plus price. No new webhook endpoint or key permissions are required. Check any product-specific promotion code restrictions if you create a separate Stripe Product. Missing Starter configuration fails that checkout without disabling Plus. The browser sends only a package code; submitted price amounts or credit counts do not control fulfillment. Payment return messages report package credits without assuming every package contains 5+2.
+
+Full isolated database validation: `python scripts/test-package-options-db.py <fresh-disposable-postgres-container>`; do not run it against hosted databases.

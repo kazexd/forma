@@ -149,8 +149,8 @@ it('keeps paid downloads and payment reconciliation available when new checkout 
 
 describe('credit packages and credit redemption',()=>{
  const orderId='22222222-2222-4222-8222-222222222222';
- function credits(){
-  const x=setup({packagePriceId:'price_package'});
+ function credits(options={}){
+  const x=setup({packagePriceId:'price_package',...options});
   const order={id:orderId,owner_id:'owner',state:'pending',stripe_livemode:false,price_id:'price_package',price_amount:549,price_currency:'cad',checkout_origin:'http://localhost:5173',checkout_expires_at:Math.floor(Date.now()/1000)+3600,checkout_session_id:null};
   x.store.reserveCreditOrder=vi.fn().mockResolvedValue(order);x.store.creditOrder=vi.fn().mockResolvedValue(order);x.store.attachCreditSession=vi.fn().mockResolvedValue();x.store.expireCreditOrder=vi.fn().mockResolvedValue();x.store.completeCreditOrder=vi.fn().mockImplementation(async()=>{order.state='paid';return true;});x.store.unlockPortrait=vi.fn().mockResolvedValue('unlocked');
   x.stripe.prices.retrieve.mockResolvedValue({id:'price_package',livemode:false,active:true,type:'one_time',unit_amount:549,currency:'cad'});
@@ -168,6 +168,22 @@ describe('credit packages and credit redemption',()=>{
   const {app,order,stripe}=credits();order.promotions_enabled=true;
   expect((await app.packageCheckout(request('POST'))).status).toBe(200);
   expect(stripe.checkout.sessions.create.mock.calls[0][0].allow_promotion_codes).toBe(true);
+ });
+ const starterRequest=(plan='starter')=>new Request('http://localhost:5173/api/credit-packages/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({package:plan,amount:1,generations:999,unlocks:999})});
+ it('creates a starter checkout using only its server-controlled CAD price and package',async()=>{
+  const {app,order,stripe,store}=credits({starterPackagePriceId:'price_starter'});Object.assign(order,{package_code:'starter',generation_credits:3,unlock_credits:1,price_id:'price_starter',price_amount:449,promotions_enabled:true});
+  stripe.prices.retrieve.mockResolvedValue({id:'price_starter',livemode:false,active:true,type:'one_time',unit_amount:449,currency:'cad'});
+  expect((await app.packageCheckout(starterRequest())).status).toBe(200);
+  expect(store.reserveCreditOrder).toHaveBeenCalledWith('owner',expect.objectContaining({id:'price_starter',unit_amount:449}),'http://localhost:5173','starter');
+  expect(stripe.checkout.sessions.create).toHaveBeenCalledWith(expect.objectContaining({allow_promotion_codes:true,line_items:[{price:'price_starter',quantity:1}]}),{idempotencyKey:'credit-package-v1-'+orderId});
+ });
+ it('rejects unknown packages before Stripe price lookup',async()=>{const {app,stripe}=credits();expect((await app.packageCheckout(starterRequest('__proto__'))).status).toBe(400);expect(stripe.prices.retrieve).not.toHaveBeenCalled();});
+ it('does not substitute the plus price when starter is unconfigured',async()=>{const {app,stripe}=credits();expect((await app.packageCheckout(starterRequest())).status).toBe(503);expect(stripe.prices.retrieve).not.toHaveBeenCalled();});
+ it('rejects a configured starter price of the wrong amount',async()=>{const {app,store}=credits({starterPackagePriceId:'price_starter'});expect((await app.packageCheckout(starterRequest())).status).toBe(503);expect(store.reserveCreditOrder).not.toHaveBeenCalled();});
+ it('fulfills a fully discounted starter against its original 449-cent snapshot',async()=>{
+  const {app,order,stripe,store}=credits();Object.assign(order,{package_code:'starter',price_id:'price_starter',price_amount:449,generation_credits:3,unlock_credits:1,promotions_enabled:true,checkout_session_id:'cs_package'});
+  const session=financials({...paidPackage(),amount_total:0,payment_status:'no_payment_required'},'price_starter',449);session.total_details.amount_discount=449;session.discounts=[{promotion_code:'promo_starter'}];Object.assign(session.line_items.data[0],{amount_discount:449,amount_total:0});stripe.checkout.sessions.retrieve.mockResolvedValue(session);
+  expect((await app.packageStatus(request(),orderId)).status).toBe(200);expect(store.completeCreditOrder).toHaveBeenCalledWith(order,session,expect.objectContaining({subtotal:449,discount:449,total:0}));
  });
  it('uses a fixed server-side package price and durable order idempotency',async()=>{
   const {app,stripe,store}=credits();const res=await app.packageCheckout(request('POST'));expect(res.status).toBe(200);
@@ -216,7 +232,7 @@ it('accepts package checkout through a Render reverse proxy and saves the public
   stripe.prices.retrieve.mockResolvedValue({id:'price_package',livemode:false,active:true,type:'one_time',unit_amount:549,currency:'cad'});
   store.reserveCreditOrder=vi.fn().mockResolvedValue({id:'22222222-2222-4222-8222-222222222222',owner_id:'owner',stripe_livemode:false,price_id:'price_package',price_amount:549,price_currency:'cad',checkout_origin:'https://forma-production.onrender.com',checkout_expires_at:Math.floor(Date.now()/1000)+3600});store.attachCreditSession=vi.fn();
   const res=await app.packageCheckout(new Request('http://localhost:10000/api/credit-packages/checkout',{method:'POST',headers:{Origin:'https://forma-production.onrender.com','sec-fetch-site':'same-origin'}}));
-  expect(res.status).toBe(200);expect(store.reserveCreditOrder).toHaveBeenCalledWith('owner',expect.anything(),'https://forma-production.onrender.com');expect(stripe.checkout.sessions.create.mock.calls[0][0].success_url).toMatch(/^https:\/\/forma-production\.onrender\.com\/gallery/);
+  expect(res.status).toBe(200);expect(store.reserveCreditOrder).toHaveBeenCalledWith('owner',expect.anything(),'https://forma-production.onrender.com','plus');expect(stripe.checkout.sessions.create.mock.calls[0][0].success_url).toMatch(/^https:\/\/forma-production\.onrender\.com\/gallery/);
  }finally{vi.unstubAllEnvs();}
 });
 describe('explicit Live payment mode',()=>{
