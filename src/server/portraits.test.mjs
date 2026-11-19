@@ -5,7 +5,7 @@ import {MAX_REQUEST_BYTES} from './uploads.mjs';
 const image=await sharp({create:{width:20,height:20,channels:3,background:'#aabbcc'}}).jpeg().toBuffer();
 const validAuth=()=>({auth:{getUser:vi.fn().mockResolvedValue({data:{user:{id:'test-user'}},error:null})}});
 const fakeClient=()=>({images:{edit:vi.fn().mockResolvedValue({data:[{b64_json:image.toString('base64')}]})}});
-const fakeStore=()=>({ready:vi.fn().mockResolvedValue(),generationRateAllowed:vi.fn().mockResolvedValue(true),generationRequest:vi.fn().mockResolvedValue(null),beginGeneration:vi.fn().mockResolvedValue('accepted'),finishGeneration:vi.fn().mockResolvedValue(),save:vi.fn().mockResolvedValue(),get:vi.fn(),read:vi.fn()});
+const fakeStore=()=>({billingMode:vi.fn().mockResolvedValue('test'),ready:vi.fn().mockResolvedValue(),generationRateAllowed:vi.fn().mockResolvedValue(true),generationRequest:vi.fn().mockResolvedValue(null),beginGeneration:vi.fn().mockResolvedValue('accepted'),finishGeneration:vi.fn().mockResolvedValue(),save:vi.fn().mockResolvedValue(),get:vi.fn(),read:vi.fn()});
 const setup=(options={})=>createHandlers({authClient:validAuth(),store:fakeStore(),generationEnabled:true,verifyHuman:vi.fn().mockResolvedValue(),...options});
 function request({count=5,style='casual',consent='true',buffer=image,mime='image/jpeg',authorization='Bearer valid-token',headers={},signal,extraFields=[]}={}){
  const form=new FormData();form.append('style',style);form.append('consent',consent);
@@ -147,4 +147,7 @@ it('normalizes non-JPEG model output to a private JPEG and watermarked preview',
 it('accepts generation from the trusted public origin behind Render while keeping allowance protection',async()=>{
  vi.stubEnv('APP_ORIGIN','https://forma-production.onrender.com');
  try{const store=fakeStore();store.beginGeneration.mockResolvedValue('allowance_exhausted');const client=fakeClient();const res=await submit(setup({store,client}),{headers:{Origin:'https://forma-production.onrender.com','sec-fetch-site':'same-origin'}});expect(res.status).toBe(429);expect(res.body.code).toBe('generation_allowance_exhausted');expect(client.images.edit).not.toHaveBeenCalled();}finally{vi.unstubAllEnvs();}
+});
+it('does not debit generation when the configured payment mode disagrees with the database',async()=>{
+ const store=fakeStore(),client=fakeClient();store.billingMode.mockResolvedValue('live');const res=await submit(setup({store,client}));expect(res.status).toBe(503);expect(store.beginGeneration).not.toHaveBeenCalled();expect(client.images.edit).not.toHaveBeenCalled();
 });

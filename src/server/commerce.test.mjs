@@ -6,13 +6,13 @@ import {createCommerce} from './commerce.mjs';
 
 const id='11111111-1111-4111-8111-111111111111';
 
-const row=()=>({id,owner_id:'owner',style:'casual',payment_state:'unpaid',original_path:'private/original.jpg',preview_path:'private/preview.jpg',expires_at:'2035-01-01T00:00:00.000Z',checkout_key:'key',checkout_session_id:'cs_test_1',price_id:'price_test',price_amount:399,price_currency:'usd',checkout_origin:'http://localhost:5173',checkout_expires_at:Math.floor(Date.now()/1000)+1800});
+const row=()=>({id,owner_id:'owner',style:'casual',stripe_livemode:false,payment_state:'unpaid',original_path:'private/original.jpg',preview_path:'private/preview.jpg',expires_at:'2035-01-01T00:00:00.000Z',checkout_key:'key',checkout_session_id:'cs_test_1',price_id:'price_test',price_amount:399,price_currency:'usd',checkout_origin:'http://localhost:5173',checkout_expires_at:Math.floor(Date.now()/1000)+1800});
 
 function setup(overrides={}){
 
  const record=row();
 
- const store={ready:vi.fn().mockResolvedValue(),get:vi.fn().mockImplementation(async()=>record),read:vi.fn().mockResolvedValue(Buffer.from('JPEG')),reserveCheckout:vi.fn().mockImplementation(async()=>record),attachSession:vi.fn().mockResolvedValue(),clearCheckout:vi.fn().mockResolvedValue(),markPaid:vi.fn().mockImplementation(async()=>{record.payment_state='paid';return true;}),pendingDeletion:vi.fn().mockResolvedValue([]),list:vi.fn().mockResolvedValue([]),claimDelete:vi.fn().mockResolvedValue(true),remove:vi.fn().mockResolvedValue()};
+ const store={billingMode:vi.fn().mockResolvedValue('test'),ready:vi.fn().mockResolvedValue(),get:vi.fn().mockImplementation(async()=>record),read:vi.fn().mockResolvedValue(Buffer.from('JPEG')),reserveCheckout:vi.fn().mockImplementation(async()=>record),attachSession:vi.fn().mockResolvedValue(),clearCheckout:vi.fn().mockResolvedValue(),markPaid:vi.fn().mockImplementation(async()=>{record.payment_state='paid';return true;}),pendingDeletion:vi.fn().mockResolvedValue([]),list:vi.fn().mockResolvedValue([]),claimDelete:vi.fn().mockResolvedValue(true),remove:vi.fn().mockResolvedValue()};
 
  const session={id:'cs_test_1',livemode:false,mode:'payment',status:'complete',payment_status:'paid',client_reference_id:id,amount_total:399,currency:'usd',metadata:{portrait_id:id,owner_id:'owner',checkout_key:'key'}};
 
@@ -48,7 +48,7 @@ describe('portrait ownership and preview',()=>{
 
 describe('Stripe test checkout',()=>{
 
- it('reuses an open session rather than creating a duplicate',async()=>{const {app,stripe}=setup();stripe.checkout.sessions.retrieve.mockResolvedValue({status:'open',url:'https://checkout.stripe.com/test'});const response=await app.checkout(request('POST'),id);expect(response.status).toBe(200);expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();});
+ it('reuses an open session rather than creating a duplicate',async()=>{const {app,stripe}=setup();stripe.checkout.sessions.retrieve.mockResolvedValue({livemode:false,status:'open',url:'https://checkout.stripe.com/test'});const response=await app.checkout(request('POST'),id);expect(response.status).toBe(200);expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();});
 
  it('uses a server-side fixed price and idempotency key',async()=>{const {app,stripe,record}=setup();record.checkout_session_id=null;const response=await app.checkout(request('POST'),id);expect(response.status).toBe(200);expect(stripe.checkout.sessions.create.mock.calls[0][0]).not.toHaveProperty('payment_method_types');expect(stripe.checkout.sessions.create).toHaveBeenCalledWith(expect.objectContaining({line_items:[{price:'price_test',quantity:1}],metadata:expect.objectContaining({owner_id:'owner',portrait_id:id})}),{idempotencyKey:'portrait-v2-key'});});
 
@@ -149,7 +149,7 @@ describe('credit packages and credit redemption',()=>{
  const orderId='22222222-2222-4222-8222-222222222222';
  function credits(){
   const x=setup({packagePriceId:'price_package'});
-  const order={id:orderId,owner_id:'owner',state:'pending',price_id:'price_package',price_amount:549,price_currency:'usd',checkout_origin:'http://localhost:5173',checkout_expires_at:Math.floor(Date.now()/1000)+3600,checkout_session_id:null};
+  const order={id:orderId,owner_id:'owner',state:'pending',stripe_livemode:false,price_id:'price_package',price_amount:549,price_currency:'usd',checkout_origin:'http://localhost:5173',checkout_expires_at:Math.floor(Date.now()/1000)+3600,checkout_session_id:null};
   x.store.reserveCreditOrder=vi.fn().mockResolvedValue(order);x.store.creditOrder=vi.fn().mockResolvedValue(order);x.store.attachCreditSession=vi.fn().mockResolvedValue();x.store.expireCreditOrder=vi.fn().mockResolvedValue();x.store.completeCreditOrder=vi.fn().mockImplementation(async()=>{order.state='paid';return true;});x.store.unlockPortrait=vi.fn().mockResolvedValue('unlocked');
   x.stripe.prices.retrieve.mockResolvedValue({id:'price_package',livemode:false,active:true,type:'one_time',unit_amount:549,currency:'usd'});
   return {...x,order};
@@ -167,7 +167,7 @@ describe('credit packages and credit redemption',()=>{
  it('reuses an open package session without creating another',async()=>{const {app,order,stripe}=credits();order.checkout_session_id='cs_package';stripe.checkout.sessions.retrieve.mockResolvedValue({...paidPackage(),payment_status:'unpaid',status:'open',url:'https://checkout.stripe.com/test'});expect((await app.packageCheckout(request('POST'))).status).toBe(200);expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();});
  it('reconciles a verified paid package on refresh and signed webhook',async()=>{const {app,order,stripe,store}=credits();order.checkout_session_id='cs_package';stripe.checkout.sessions.retrieve.mockResolvedValue(paidPackage());const res=await app.packageStatus(request(),orderId);expect(await res.json()).toEqual({order:{id:orderId,state:'paid'}});expect(store.completeCreditOrder).toHaveBeenCalled();expect((await app.webhook(eventRequest(stripe))).status).toBe(200);});
  it.each([{amount_total:100},{currency:'hkd'},{client_reference_id:'other'},{metadata:{kind:'credit_package',order_id:orderId,owner_id:'other'}},{id:'other_session'}])('rejects mismatched package payment %j',async change=>{const {app,order,stripe,store}=credits();order.checkout_session_id='cs_package';stripe.checkout.sessions.retrieve.mockResolvedValue({...paidPackage(),...change});expect((await app.packageStatus(request(),orderId)).status).toBe(503);expect(store.completeCreditOrder).not.toHaveBeenCalled();});
- it('does not grant for unpaid or live packages',async()=>{const {app,order,stripe,store}=credits();order.checkout_session_id='cs_package';for(const change of [{payment_status:'unpaid'},{livemode:true}]){stripe.checkout.sessions.retrieve.mockResolvedValue({...paidPackage(),...change});const res=await app.packageStatus(request(),orderId);expect((await res.json()).order.state).toBe('pending');}expect(store.completeCreditOrder).not.toHaveBeenCalled();});
+ it('does not grant for unpaid or live packages',async()=>{const {app,order,stripe,store}=credits();order.checkout_session_id='cs_package';for(const change of [{payment_status:'unpaid'},{livemode:true}]){stripe.checkout.sessions.retrieve.mockResolvedValue({...paidPackage(),...change});const res=await app.packageStatus(request(),orderId);if(change.livemode===true)expect(res.status).toBe(409);else expect((await res.json()).order.state).toBe('pending');}expect(store.completeCreditOrder).not.toHaveBeenCalled();});
  it('does not recreate unresolved orders after their checkout deadline',async()=>{const {app,order,stripe}=credits();order.checkout_expires_at=1;expect((await app.packageCheckout(request('POST'))).status).toBe(409);expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();});
  it('hides other-account package orders',async()=>{const {app,store}=credits();store.creditOrder.mockResolvedValue(null);expect((await app.packageStatus(request(),orderId)).status).toBe(404);expect(store.creditOrder).toHaveBeenCalledWith('owner',orderId);});
  it('unlocks with a credit after cancelling an open single-photo checkout',async()=>{const {app,stripe,store}=credits();stripe.checkout.sessions.retrieve.mockResolvedValue({...paidPackage(),id:'cs_test_1',status:'open',payment_status:'unpaid',metadata:{portrait_id:id}});expect((await app.unlock(request('POST'),id)).status).toBe(200);expect(stripe.checkout.sessions.expire).toHaveBeenCalledWith('cs_test_1');expect(store.unlockPortrait).toHaveBeenCalled();});
@@ -176,7 +176,7 @@ describe('credit packages and credit redemption',()=>{
  it('rejects unresolved photo checkout and cross-account credit unlock',async()=>{const {app,record,store}=credits();record.checkout_session_id=null;expect((await app.unlock(request('POST'),id)).status).toBe(409);record.owner_id='other';expect((await app.unlock(request('POST'),id)).status).toBe(404);expect(store.unlockPortrait).not.toHaveBeenCalled();});
 });
 it.each([
- [{code:'resource_missing'},'same Stripe account and sandbox'],
+ [{code:'resource_missing'},'same Stripe account and mode/sandbox'],
  [{type:'StripeAuthenticationError'},'authentication failed'],
  [{type:'StripePermissionError'},'permissions'],
  [{type:'StripeConnectionError'},'No checkout was created']
@@ -200,8 +200,30 @@ it('accepts package checkout through a Render reverse proxy and saves the public
  try{
   const {app,stripe,store}=setup({packagePriceId:'price_package'});
   stripe.prices.retrieve.mockResolvedValue({id:'price_package',livemode:false,active:true,type:'one_time',unit_amount:549,currency:'usd'});
-  store.reserveCreditOrder=vi.fn().mockResolvedValue({id:'22222222-2222-4222-8222-222222222222',owner_id:'owner',price_id:'price_package',checkout_origin:'https://forma-production.onrender.com',checkout_expires_at:Math.floor(Date.now()/1000)+3600});store.attachCreditSession=vi.fn();
+  store.reserveCreditOrder=vi.fn().mockResolvedValue({id:'22222222-2222-4222-8222-222222222222',owner_id:'owner',stripe_livemode:false,price_id:'price_package',checkout_origin:'https://forma-production.onrender.com',checkout_expires_at:Math.floor(Date.now()/1000)+3600});store.attachCreditSession=vi.fn();
   const res=await app.packageCheckout(new Request('http://localhost:10000/api/credit-packages/checkout',{method:'POST',headers:{Origin:'https://forma-production.onrender.com','sec-fetch-site':'same-origin'}}));
   expect(res.status).toBe(200);expect(store.reserveCreditOrder).toHaveBeenCalledWith('owner',expect.anything(),'https://forma-production.onrender.com');expect(stripe.checkout.sessions.create.mock.calls[0][0].success_url).toMatch(/^https:\/\/forma-production\.onrender\.com\/gallery/);
  }finally{vi.unstubAllEnvs();}
+});
+describe('explicit Live payment mode',()=>{
+ function live(){const x=setup({stripeMode:'live',packagePriceId:'price_package'});x.store.billingMode.mockResolvedValue('live');x.record.stripe_livemode=true;x.session.livemode=true;x.stripe.prices.retrieve.mockResolvedValue({id:'price_live',livemode:true,active:true,type:'one_time',unit_amount:399,currency:'usd'});x.stripe.checkout.sessions.create.mockResolvedValue({id:'cs_live',livemode:true,url:'https://checkout.stripe.com/live'});return x;}
+ it('creates a single-image Live checkout only with a matching Live price and database',async()=>{const {app,record,stripe}=live();record.checkout_key=null;record.checkout_session_id=null;expect((await app.checkout(request('POST'),id)).status).toBe(200);expect(stripe.checkout.sessions.create).toHaveBeenCalledTimes(1);});
+ it('fulfills a signed Live webhook and keeps payment idempotency in the database path',async()=>{const {app,store,stripe}=live();expect((await app.webhook(eventRequest(stripe,{livemode:true}))).status).toBe(200);expect(store.markPaid).toHaveBeenCalledTimes(1);});
+ it('rejects test events in Live mode before retrieving a session',async()=>{const {app,store,stripe}=live();expect((await app.webhook(eventRequest(stripe))).status).toBe(400);expect(store.markPaid).not.toHaveBeenCalled();expect(stripe.checkout.sessions.retrieve).not.toHaveBeenCalled();});
+ it('does not fulfill a different-mode session even when the signed event matches Live',async()=>{const {app,store,stripe,session}=live();session.livemode=false;expect((await app.webhook(eventRequest(stripe,{livemode:true}))).status).toBe(500);expect(store.markPaid).not.toHaveBeenCalled();});
+ it('rejects environment/database mode mismatch before pricing or checkout',async()=>{const {app,store,stripe}=live();store.billingMode.mockResolvedValue('test');expect((await app.checkout(request('POST'),id)).status).toBe(503);expect(stripe.prices.retrieve).not.toHaveBeenCalled();expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();});
+ it('rejects a test Price even when configured for Live',async()=>{const {app,record,stripe}=live();record.checkout_key=null;record.checkout_session_id=null;stripe.prices.retrieve.mockResolvedValue({livemode:false,active:true,type:'one_time',unit_amount:399,currency:'usd'});expect((await app.checkout(request('POST'),id)).status).toBe(503);expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();});
+ it('does not fulfill old test portraits in a Live deployment',async()=>{const {app,record,store}=live();record.stripe_livemode=false;expect((await app.detail(request(),id)).status).toBe(503);expect(store.markPaid).not.toHaveBeenCalled();});
+ it('serves previously unlocked test originals without trying to recharge them',async()=>{const {app,record,stripe}=live();record.payment_state='paid';record.stripe_livemode=false;expect((await app.download(request(),id)).status).toBe(200);expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();});
+ it('creates and reconciles a Live credit package without accepting a test record',async()=>{
+  const {app,store,stripe}=live();const orderId='22222222-2222-4222-8222-222222222222';
+  const order={id:orderId,owner_id:'owner',state:'pending',stripe_livemode:true,price_id:'price_live_package',price_amount:549,price_currency:'usd',checkout_origin:'http://localhost:5173',checkout_expires_at:Math.floor(Date.now()/1000)+3600};
+  store.reserveCreditOrder=vi.fn().mockResolvedValue(order);store.attachCreditSession=vi.fn();store.creditOrder=vi.fn().mockResolvedValue(order);store.completeCreditOrder=vi.fn().mockImplementation(async()=>{order.state='paid';return true;});
+  stripe.prices.retrieve.mockResolvedValue({id:'price_live_package',livemode:true,active:true,type:'one_time',unit_amount:549,currency:'usd'});
+  expect((await app.packageCheckout(request('POST'))).status).toBe(200);
+  order.checkout_session_id='cs_live';stripe.checkout.sessions.retrieve.mockResolvedValue({id:'cs_live',livemode:true,mode:'payment',payment_status:'paid',status:'complete',client_reference_id:orderId,amount_total:549,currency:'usd',metadata:{kind:'credit_package',order_id:orderId,owner_id:'owner'}});
+  expect((await app.packageStatus(request(),orderId)).status).toBe(200);expect(store.completeCreditOrder).toHaveBeenCalledTimes(1);
+  order.stripe_livemode=false;expect((await app.packageStatus(request(),orderId)).status).toBe(409);expect(store.completeCreditOrder).toHaveBeenCalledTimes(1);
+ });
+ it('fails closed on misspelled modes even with an injected Stripe client',async()=>{const {app,stripe}=setup({stripeMode:'LIVE'});expect((await app.checkout(request('POST'),id)).status).toBe(503);expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();});
 });

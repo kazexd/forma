@@ -32,3 +32,8 @@ it('keeps balances visible and reports checkout errors',async()=>{
  render(<CreditWallet remaining={0} unlocks={2} onRefresh={async()=>{}}/>);
  fireEvent.click(screen.getByRole('button',{name:/Buy 5 attempts/}));await screen.findByRole('alert');expect(screen.getByRole('alert')).toHaveTextContent('Checkout unavailable');expect(screen.getByText(/2 original unlock credits/)).toBeInTheDocument();
 });
+it('shows an explicit real-charge notice only for Live mode',()=>{
+ const {rerender}=render(<CreditWallet remaining={2} unlocks={0} paymentMode="live" onRefresh={async()=>{}}/>);
+ expect(screen.getByText(/Live checkout — real charges/)).toBeInTheDocument();expect(screen.queryByText(/Test checkout/)).not.toBeInTheDocument();
+ rerender(<CreditWallet remaining={2} unlocks={0} paymentMode="test" onRefresh={async()=>{}}/>);expect(screen.getByText(/Test checkout — no real charges/)).toBeInTheDocument();
+});

@@ -4,7 +4,7 @@ import App from './App';
 import {useAuth} from './useAuth';
 vi.mock('./useAuth',()=>({useAuth:vi.fn()}));
 const authenticated=()=>({user:{id:'user-1',email:'user@example.com'},loading:false,signingIn:false,error:null,configured:true,signIn:vi.fn(),signOut:vi.fn().mockResolvedValue(true)});
-beforeEach(()=>{vi.spyOn(api,'getGenerationAllowance').mockResolvedValue({remaining:3,unlocks:0});vi.mocked(useAuth).mockReturnValue(authenticated() as unknown as ReturnType<typeof useAuth>);});
+beforeEach(()=>{vi.spyOn(api,'getGenerationAllowance').mockResolvedValue({remaining:3,unlocks:0,mode:'test'});vi.mocked(useAuth).mockReturnValue(authenticated() as unknown as ReturnType<typeof useAuth>);});
 import * as api from './photos';
 const files=(n:number)=>Array.from({length:n},(_,i)=>new File(['photo'],`photo-${i}.jpg`,{type:'image/jpeg'}));
 async function upload(n:number){fireEvent.change(document.querySelector('input')!,{target:{files:files(n)}});await waitFor(()=>expect(screen.getAllByRole('button',{name:/Remove photo/})).toHaveLength(Math.min(n,5)));}
@@ -32,13 +32,13 @@ describe('preview purchase UI',()=>{
 });
 
 
-it('disables generation when no allowance remains and keeps existing portraits accessible',async()=>{vi.mocked(api.getGenerationAllowance).mockResolvedValue({remaining:0,unlocks:0});vi.spyOn(api,'decodeImage').mockResolvedValue();const generate=vi.spyOn(api,'generatePhotos');render(<App/>);await screen.findByText(/0 generation attempts remaining/);await upload(5);fireEvent.click(screen.getByRole('button',{name:/Choose your style/}));fireEvent.click(screen.getByRole('checkbox'));expect(screen.getByRole('button',{name:'Generate portrait'})).toBeDisabled();expect(generate).not.toHaveBeenCalled();});
+it('disables generation when no allowance remains and keeps existing portraits accessible',async()=>{vi.mocked(api.getGenerationAllowance).mockResolvedValue({remaining:0,unlocks:0,mode:'test'});vi.spyOn(api,'decodeImage').mockResolvedValue();const generate=vi.spyOn(api,'generatePhotos');render(<App/>);await screen.findByText(/0 generation attempts remaining/);await upload(5);fireEvent.click(screen.getByRole('button',{name:/Choose your style/}));fireEvent.click(screen.getByRole('checkbox'));expect(screen.getByRole('button',{name:'Generate portrait'})).toBeDisabled();expect(generate).not.toHaveBeenCalled();});
 
 
 it('recovers a completed generation after a reload without resubmitting photos',async()=>{const id='11111111-1111-4111-8111-111111111111';sessionStorage.setItem('forma-generation:user-1',id);const generate=vi.spyOn(api,'generatePhotos');vi.spyOn(api,'getGenerationRequest').mockResolvedValue({id,status:'succeeded',portraitId:id});vi.spyOn(api,'loadPortrait').mockResolvedValue({id,style:'casual',paid:false,watermarked:true,previewUrl:'data:image/jpeg;base64,marked',expiresAt:null,downloadFilename:'preview.jpg'});render(<App/>);await screen.findByRole('button',{name:'Buy original — US$3.99 USD'});expect(generate).not.toHaveBeenCalled();expect(sessionStorage.getItem('forma-generation:user-1')).toBeNull();});
 it('keeps an uncertain attempt visible and disables new generation until explicitly acknowledged',async()=>{vi.spyOn(api,'decodeImage').mockResolvedValue();vi.spyOn(api,'generatePhotos').mockRejectedValue(new api.GenerationRequestError('connection lost','generation_uncertain','request'));vi.spyOn(api,'getGenerationRequest').mockRejectedValue(new Error('offline'));render(<App/>);await upload(5);fireEvent.click(screen.getByRole('button',{name:'Choose your style'}));fireEvent.click(screen.getByRole('checkbox'));fireEvent.click(screen.getByRole('button',{name:'Generate portrait'}));await screen.findByRole('button',{name:'Check generation status'});expect(screen.getByRole('button',{name:'Generate portrait'})).toBeDisabled();fireEvent.click(screen.getByRole('button',{name:'Continue with a new attempt'}));expect(screen.getByRole('button',{name:'Generate portrait'})).toBeEnabled();});
 it('uses an unlock credit and replaces the result with the original without checkout',async()=>{
- vi.mocked(api.getGenerationAllowance).mockResolvedValue({remaining:8,unlocks:2});
+ vi.mocked(api.getGenerationAllowance).mockResolvedValue({remaining:8,unlocks:2,mode:'test'});
  const id='11111111-1111-4111-8111-111111111111';const photo:api.GeneratedPhoto={id,style:'casual',paid:false,watermarked:true,previewUrl:'data:image/jpeg;base64,preview',downloadFilename:'preview.jpg',expiresAt:null};
  vi.spyOn(api,'decodeImage').mockResolvedValue();vi.spyOn(api,'generatePhotos').mockResolvedValue([photo]);
  const unlock=vi.spyOn(api,'unlockPortrait').mockResolvedValue();vi.spyOn(api,'loadPortrait').mockResolvedValue({...photo,paid:true,watermarked:false,previewUrl:'data:image/jpeg;base64,original'});const buy=vi.spyOn(api,'buyPortrait');

@@ -71,12 +71,12 @@ export async function downloadOriginal(id:string):Promise<void>{
  saveOriginalFile(await getOriginalFile(id));
 }
 
-export async function getGenerationAllowance():Promise<{remaining:number;unlocks:number}>{
+export async function getGenerationAllowance():Promise<{remaining:number;unlocks:number;mode:'test'|'live'}>{
  const token=await getAccessToken();
  const response=await fetch('/api/generation-allowance',{headers:{Authorization:'Bearer '+token},cache:'no-store'});
  const data=await response.json();
  if(!response.ok)throw new Error(data.error||'Could not check your generation allowance.');
- if(!Number.isSafeInteger(data.remaining)||data.remaining<0||!Number.isSafeInteger(data.unlocks)||data.unlocks<0)throw new Error('Invalid generation allowance.');
+ if(!['test','live'].includes(data.mode)||!Number.isSafeInteger(data.remaining)||data.remaining<0||!Number.isSafeInteger(data.unlocks)||data.unlocks<0)throw new Error('Invalid generation allowance.');
  return data;
 }
 

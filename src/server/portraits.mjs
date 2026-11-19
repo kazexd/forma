@@ -1,3 +1,4 @@
+import {stripeConfiguration} from './stripe-config.mjs';
 import {featureEnabled} from './features.mjs';
 import sharp from 'sharp';
 import {toFile} from 'openai';
@@ -44,7 +45,7 @@ export function createHandlers({configuration=imageConfiguration(),apiKey=config
   if(configuration.invalid)return fail('The configured image model is not supported. Check OPENROUTER_IMAGE_MODEL.',503);
   if(!apiKey&&!client)return fail(`${configuration.label} is not configured. Set ${configuration.keyName} and restart the app.`,503);
   if(!store)return fail('Private portrait storage is not configured. Complete the Supabase storage setup before generating.',503);
-  try{await store.ready();}catch{return fail('Private portrait storage is unavailable. Check the migration and private bucket before generating.',503);}
+  try{const billing=stripeConfiguration();if(!billing.valid||await store.billingMode()!==billing.mode)return fail('Account payment mode is not ready.',503);await store.ready();}catch{return fail('Private portrait storage is unavailable. Check the migration and private bucket before generating.',503);}
   if(active)return fail('A portrait is already being generated. Please wait before trying again.',429);
   active=true;
   let files=[],accepted=false,requestId;

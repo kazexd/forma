@@ -34,13 +34,13 @@ it('accepts a purchased original from the authenticated status endpoint',async()
 it('rejects unwatermarked images for unpaid portraits',async()=>{const {loadPortrait}=await import('./photos');vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:true,json:async()=>({photo:{paid:false,watermarked:false,previewUrl:'data:image/jpeg;base64,original'}})}));await expect(loadPortrait('unpaid')).rejects.toThrow('Invalid portrait');});
 
 
-it('loads the authenticated no-cache generation allowance',async()=>{const {getGenerationAllowance}=await import('./photos');const fetch=vi.fn().mockResolvedValue({ok:true,json:async()=>({remaining:0,unlocks:0})});vi.stubGlobal('fetch',fetch);expect(await getGenerationAllowance()).toEqual({remaining:0,unlocks:0});expect(fetch).toHaveBeenCalledWith('/api/generation-allowance',expect.objectContaining({cache:'no-store',headers:{Authorization:'Bearer test-access-token'}}));});
+it('loads the authenticated no-cache generation allowance',async()=>{const {getGenerationAllowance}=await import('./photos');const fetch=vi.fn().mockResolvedValue({ok:true,json:async()=>({remaining:0,unlocks:0,mode:'test'})});vi.stubGlobal('fetch',fetch);expect(await getGenerationAllowance()).toEqual({remaining:0,unlocks:0,mode:'test'});expect(fetch).toHaveBeenCalledWith('/api/generation-allowance',expect.objectContaining({cache:'no-store',headers:{Authorization:'Bearer test-access-token'}}));});
 
 
 it('sends the request ID and human verification token as headers, not extra photo form fields',async()=>{const fetch=vi.fn().mockResolvedValue({ok:true,json:async()=>({photos:[{id:'photo',previewUrl:'data:image/jpeg;base64,marked',watermarked:true,paid:false}]})});vi.stubGlobal('fetch',fetch);await generatePhotos(files(),'casual',{requestId:'request-id',turnstileToken:'token'});expect(fetch.mock.calls[0][1].headers).toEqual({Authorization:'Bearer test-access-token','Idempotency-Key':'request-id','X-Turnstile-Token':'token'});expect([...fetch.mock.calls[0][1].body.keys()]).toEqual(['photos','photos','photos','photos','photos','style','consent']);});
 it('reads accumulated generation and unlock balances without a fixed cap',async()=>{
- const {getGenerationAllowance}=await import('./photos');const fetch=vi.fn().mockResolvedValue(Response.json({remaining:18,unlocks:6}));vi.stubGlobal('fetch',fetch);
- expect(await getGenerationAllowance()).toEqual({remaining:18,unlocks:6});expect(fetch).toHaveBeenCalledWith('/api/generation-allowance',expect.objectContaining({cache:'no-store',headers:{Authorization:'Bearer test-access-token'}}));
+ const {getGenerationAllowance}=await import('./photos');const fetch=vi.fn().mockResolvedValue(Response.json({remaining:18,unlocks:6,mode:'test'}));vi.stubGlobal('fetch',fetch);
+ expect(await getGenerationAllowance()).toEqual({remaining:18,unlocks:6,mode:'test'});expect(fetch).toHaveBeenCalledWith('/api/generation-allowance',expect.objectContaining({cache:'no-store',headers:{Authorization:'Bearer test-access-token'}}));
 });
 it('refuses a package checkout URL outside Stripe',async()=>{
  const {buyCreditPackage}=await import('./photos');vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({url:'https://evil.example/pay'})));await expect(buyCreditPackage()).rejects.toThrow('Invalid checkout destination');

@@ -19,11 +19,12 @@ describe('deployment safety defaults',()=>{
  });
 });
 
-const functions=['forma_get_credits','forma_reserve_credit_order','forma_complete_credit_order','forma_unlock_portrait','forma_get_generation_allowance','forma_generation_rate_allowed','forma_begin_generation','forma_finish_generation','forma_publish_generation','forma_complete_purchase','forma_claim_portrait_delete','forma_reserve_checkout'];
+const functions=['forma_get_credits','forma_reserve_credit_order_mode','forma_complete_credit_order_mode','forma_unlock_portrait_mode','forma_get_generation_allowance','forma_generation_rate_allowed','forma_begin_generation_mode','forma_finish_generation','forma_publish_generation','forma_complete_purchase_mode','forma_claim_portrait_delete','forma_reserve_checkout_mode'];
 const env={NODE_ENV:'production',NEXT_PUBLIC_SUPABASE_URL:'https://example.supabase.co',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'public-test',SUPABASE_SERVICE_ROLE_KEY:'server-test'};
 function fetchFixture({publicBucket=false,missingFunction=false,google=true,tableStatus=200}={}){
  return vi.fn(async(url,options)=>{
   expect(options.signal).toBeInstanceOf(AbortSignal);
+  if(url.includes('/forma_billing_control'))return Response.json([{mode:'test'}]);
   if(url.includes('/storage/'))return Response.json({id:'forma-portraits',public:publicBucket});
   if(url.endsWith('/auth/v1/settings'))return Response.json({external:{google}});
   if(url.endsWith('/rest/v1/'))return Response.json({paths:Object.fromEntries(functions.slice(missingFunction?1:0).map(name=>['/rpc/'+name,{}]))});
@@ -33,7 +34,7 @@ function fetchFixture({publicBucket=false,missingFunction=false,google=true,tabl
 describe('read-only readiness',()=>{
  it('checks private storage, table columns, Google auth and every required function',async()=>{
   const fetcher=fetchFixture();expect(await probeDeployment({env,fetcher})).toBe(true);
-  expect(fetcher).toHaveBeenCalledTimes(5);
+  expect(fetcher).toHaveBeenCalledTimes(6);
   for(const [url,options] of fetcher.mock.calls){expect(options.method??'GET').toBe('GET');expect(url).not.toContain('/rpc/');}
  });
  it.each([{publicBucket:true},{missingFunction:true},{google:false},{tableStatus:404}])('rejects incomplete deployment %j',async invalid=>{
@@ -64,4 +65,11 @@ it('readiness checks only the selected image provider and rejects unknown provid
  expect(await probeDeployment({env:{...base,IMAGE_PROVIDER:'openrouter',OPENAI_API_KEY:'direct'},fetcher})).toBe(false);
  expect(await probeDeployment({env:{...base,IMAGE_PROVIDER:'typo',OPENAI_API_KEY:'direct'},fetcher})).toBe(false);
  expect(fetcher).not.toHaveBeenCalled();
+});
+it('readiness rejects database/application mode mismatch and accepts explicit Live credentials only in Live',async()=>{
+ const liveEnv={...env,STRIPE_MODE:'live',CHECKOUT_ENABLED:'true',STRIPE_SECRET_KEY:'rk_live_test_fixture',STRIPE_PRICE_ID:'price_live_portrait',STRIPE_PACKAGE_PRICE_ID:'price_live_package',STRIPE_WEBHOOK_SECRET:'whsec_fixture'};
+ expect(await probeDeployment({env:liveEnv,fetcher:fetchFixture()})).toBe(false);
+ const original=fetchFixture();const fetcher=vi.fn((url,options)=>url.includes('/forma_billing_control')?Promise.resolve(Response.json([{mode:'live'}])):original(url,options));
+ expect(await probeDeployment({env:liveEnv,fetcher})).toBe(true);
+ expect(await probeDeployment({env:{...liveEnv,STRIPE_SECRET_KEY:'sk_test_wrong'},fetcher})).toBe(false);
 });
