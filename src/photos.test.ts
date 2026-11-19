@@ -13,7 +13,7 @@ describe('photo validation and API adapter',()=>{
  it.each([0,4,6,10])('rejects an invalid count of %i without calling the server',async(count)=>{const fetch=vi.fn();vi.stubGlobal('fetch',fetch);await expect(generatePhotos(files(count),'casual')).rejects.toThrow('exactly 5');expect(fetch).not.toHaveBeenCalled();});
  it('surfaces backend errors',async()=>{vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:false,json:async()=>({error:'Set OPENAI_API_KEY'})}));await expect(generatePhotos(files(),'casual')).rejects.toThrow('OPENAI_API_KEY');});
  it('rejects a malformed or stock-photo success response',async()=>{vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:true,json:async()=>({photos:[{previewUrl:'/photos/casual-1.jpg'}]})}));await expect(generatePhotos(files(),'casual')).rejects.toThrow('invalid portrait');});
- it('handles connection failures',async()=>{vi.stubGlobal('fetch',vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));await expect(generatePhotos(files(),'casual')).rejects.toThrow('local API');});
+ it('handles connection failures',async()=>{vi.stubGlobal('fetch',vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));await expect(generatePhotos(files(),'casual')).rejects.toThrow('portrait service');});
  it('times out without retrying',async()=>{vi.useFakeTimers();const fetch=vi.fn().mockImplementation((_url,{signal})=>new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')))));vi.stubGlobal('fetch',fetch);const assertion=expect(generatePhotos(files(),'casual')).rejects.toThrow('timed out');await vi.advanceTimersByTimeAsync(210000);await assertion;expect(fetch).toHaveBeenCalledTimes(1);});
 });
 
@@ -35,3 +35,6 @@ it('rejects unwatermarked images for unpaid portraits',async()=>{const {loadPort
 
 
 it('loads the authenticated no-cache generation allowance',async()=>{const {getGenerationAllowance}=await import('./photos');const fetch=vi.fn().mockResolvedValue({ok:true,json:async()=>({remaining:0,limit:3})});vi.stubGlobal('fetch',fetch);expect(await getGenerationAllowance()).toEqual({remaining:0,limit:3});expect(fetch).toHaveBeenCalledWith('/api/generation-allowance',expect.objectContaining({cache:'no-store',headers:{Authorization:'Bearer test-access-token'}}));});
+
+
+it('sends the request ID and human verification token as headers, not extra photo form fields',async()=>{const fetch=vi.fn().mockResolvedValue({ok:true,json:async()=>({photos:[{id:'photo',previewUrl:'data:image/jpeg;base64,marked',watermarked:true,paid:false}]})});vi.stubGlobal('fetch',fetch);await generatePhotos(files(),'casual',{requestId:'request-id',turnstileToken:'token'});expect(fetch.mock.calls[0][1].headers).toEqual({Authorization:'Bearer test-access-token','Idempotency-Key':'request-id','X-Turnstile-Token':'token'});expect([...fetch.mock.calls[0][1].body.keys()]).toEqual(['photos','photos','photos','photos','photos','style','consent']);});

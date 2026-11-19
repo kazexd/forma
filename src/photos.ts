@@ -15,10 +15,14 @@ export function fileError(file:File): string | null {
 export function decodeImage(url:string):Promise<void> {
  return new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>{image.naturalWidth ? resolve() : reject(new Error('Empty image'));};image.onerror=()=>reject(new Error('Unreadable image'));image.src=url;});
 }
-export async function generatePhotos(files:File[],style:Style):Promise<GeneratedPhoto[]> {
+export class GenerationRequestError extends Error{
+ constructor(message:string,public code:string,public requestId:string){super(message);this.name='GenerationRequestError';}
+}
+export async function generatePhotos(files:File[],style:Style,options:{requestId?:string;turnstileToken?:string}={}):Promise<GeneratedPhoto[]> {
  if(!canContinue(files.length)) throw new Error('Please select exactly 5 photos.');
  if(files.some(file=>fileError(file))) throw new Error('Please remove invalid photos.');
  const token=await getAccessToken();
+ const requestId=options.requestId??crypto.randomUUID();
  const data=new FormData();
  files.forEach(file=>data.append('photos',file));
  data.append('style',style);
@@ -26,14 +30,14 @@ export async function generatePhotos(files:File[],style:Style):Promise<Generated
  const abort=new AbortController();
  const timeout=setTimeout(()=>abort.abort(),210_000);
  try{
-  const response=await fetch('/api/generate',{method:'POST',headers:{Authorization:`Bearer ${token}`},body:data,signal:abort.signal});
+  const response=await fetch('/api/generate',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Idempotency-Key':requestId,...(options.turnstileToken?{'X-Turnstile-Token':options.turnstileToken}:{})},body:data,signal:abort.signal});
   const payload=await response.json().catch(()=>null);
-  if(!response.ok)throw new Error(payload?.error||'Generation failed. Please try again.');
-  if(!Array.isArray(payload?.photos)||payload.photos.length!==1||typeof payload.photos[0]?.previewUrl!=='string'||!payload.photos[0].previewUrl.startsWith('data:image/jpeg;base64,')||payload.photos[0].watermarked!==true||payload.photos[0].paid!==false)throw new Error('The server returned an invalid portrait.');
+  if(!response.ok)throw new GenerationRequestError(payload?.error||'Generation failed. Check the attempt status before retrying.',payload?.code||(response.status>=500?'generation_uncertain':'generation_rejected'),requestId);
+  if(!Array.isArray(payload?.photos)||payload.photos.length!==1||typeof payload.photos[0]?.previewUrl!=='string'||!payload.photos[0].previewUrl.startsWith('data:image/jpeg;base64,')||payload.photos[0].watermarked!==true||payload.photos[0].paid!==false)throw new GenerationRequestError('The server returned an invalid portrait. Check the attempt status before retrying.','generation_uncertain',requestId);
   return payload.photos;
  }catch(error){
-  if(abort.signal.aborted)throw new Error('Generation timed out. Check API usage before trying again.');
-  if(error instanceof TypeError)throw new Error('Could not reach the local API. Make sure npm run dev is running.');
+  if(abort.signal.aborted)throw new GenerationRequestError('Generation timed out. Check this attempt status before trying again.','generation_uncertain',requestId);
+  if(error instanceof TypeError)throw new GenerationRequestError('Could not reach the portrait service. Check this attempt status before trying again.','generation_uncertain',requestId);
   throw error;
  }finally{clearTimeout(timeout);}
 }
@@ -87,4 +91,12 @@ export async function loadThumbnail(id:string):Promise<Blob>{return (await portr
 export async function deletePortrait(id:string,paid:boolean):Promise<void>{
  const token=await getAccessToken();const res=await fetch('/api/portraits/'+encodeURIComponent(id),{method:'DELETE',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({confirm:true,paid})});
  if(!res.ok){const body=await res.json();throw new Error(body.error||'Could not delete your photo.');}
+}
+
+export interface GenerationRequestStatus{id:string;status:'running'|'succeeded'|'failed'|'uncertain';portraitId:string|null}
+export async function getGenerationRequest(id:string):Promise<GenerationRequestStatus>{
+ const token=await getAccessToken();const response=await fetch('/api/generation-requests/'+encodeURIComponent(id),{headers:{Authorization:'Bearer '+token},cache:'no-store'});const payload=await response.json();
+ if(!response.ok)throw new Error(payload.error||'Could not check generation status.');
+ if(!payload.request||payload.request.id!==id||!['running','succeeded','failed','uncertain'].includes(payload.request.status))throw new Error('Invalid generation status.');
+ return payload.request;
 }

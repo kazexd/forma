@@ -13,6 +13,18 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-disposable-only
+          POSTGRES_DB: forma_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       GENERATION_ENABLED: 'false'
       CHECKOUT_ENABLED: 'false'
@@ -25,4 +37,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Check database transactions and concurrency
+        run: python3 scripts/test-generation-db.py ${{ job.services.postgres.id }}
       - run: npm run build

@@ -7,13 +7,23 @@ export function createPortraitStore({url=process.env.NEXT_PUBLIC_SUPABASE_URL,ke
  return {
   async ready(){const data=assert(await db.storage.getBucket(bucket));if(data.public)throw new Error('Portrait storage must be private.');assert(await db.from('forma_portraits').select('id').limit(0));},
   async allowance(owner){return assert(await db.rpc('forma_get_generation_allowance',{p_owner:owner}));},
-  async reserveAttempt(owner){return assert(await db.rpc('forma_consume_generation',{p_owner:owner}));},
-  async save(record,original,preview){
+  async generationRateAllowed(owner){return assert(await db.rpc('forma_generation_rate_allowed',{p_owner:owner}));},
+  async generationRequest(owner,id){return assert(await db.from('forma_generation_requests').select('id,status,portrait_id,style,fingerprint,lease_until').eq('id',id).eq('owner_id',owner).maybeSingle());},
+  async beginGeneration(owner,id,style,fingerprint,tokenHash){return assert(await db.rpc('forma_begin_generation',{p_owner:owner,p_id:id,p_style:style,p_fingerprint:fingerprint,p_token_hash:tokenHash}));},
+  async finishGeneration(owner,id,uncertain){assert(await db.rpc('forma_finish_generation',{p_owner:owner,p_id:id,p_uncertain:uncertain}));},
+  async save(record,original,preview,requestId){
    const paths=[];
    try{
     for(const [path,buffer] of [[record.original_path,original],[record.preview_path,preview]]){assert(await db.storage.from(bucket).upload(path,buffer,{contentType:'image/jpeg',upsert:false}));paths.push(path);}
-    assert(await db.from('forma_portraits').insert(record));
-   }catch(error){if(paths.length)await db.storage.from(bucket).remove(paths);throw error;}
+    if(!requestId)throw new Error('A reserved generation request is required.');
+    assert(await db.rpc('forma_publish_generation',{p_owner:record.owner_id,p_id:requestId,p_original:record.original_path,p_preview:record.preview_path}));
+   }catch(error){
+    // A lost RPC response may follow a committed transaction. Never delete its images.
+    const existing=await db.from('forma_portraits').select('id').eq('id',record.id).maybeSingle();
+    if(!existing.error&&existing.data)return;
+    if(!existing.error&&paths.length)await db.storage.from(bucket).remove(paths);
+    throw error;
+   }
   },
   async get(id){return assert(await db.from('forma_portraits').select('*').eq('id',id).maybeSingle());},
   async read(path){const blob=assert(await db.storage.from(bucket).download(path));return Buffer.from(await blob.arrayBuffer());},

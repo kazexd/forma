@@ -39,3 +39,5 @@
  .site-header .account-button{font-size:11px}
 }
 html{scrollbar-gutter:stable}
+
+.human-verification{margin-top:22px;max-width:100%;min-height:65px}.human-verification>p{color:#a14027;font-size:12px}.generation-recovery{padding:16px;background:#edf2e8;border:1px solid #d4dfca;border-radius:8px;margin-bottom:22px}.generation-recovery p{font-size:12px;line-height:1.7}.generation-recovery .text-button{display:inline-flex;margin-right:16px}
