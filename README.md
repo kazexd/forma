@@ -1,71 +1,320 @@
-# Forma — Professional Photo MVP
+# Forma
 
-A full-stack **Next.js App Router** application with React and TypeScript. Upload exactly **5 photos**, choose one of three styles, and generate **1 professional portrait** through OpenAI or OpenRouter. Supabase manages Google sign-up/sign-in. The frontend and API run in a single Node.js process; there is no separate Express server or frontend proxy.
+AI-generated professional portraits from five recent photos. Built with **Next.js App Router, React and TypeScript**, with Google authentication/private storage through Supabase, image generation through OpenAI or OpenRouter, and one-time Stripe Checkout purchases.
+
+Website: [forma.jo3.org](https://forma.jo3.org) · Support: [forma.portraits@gmail.com](mailto:forma.portraits@gmail.com)
+
+## User flow
+
+1. Sign in with Google. New accounts receive **3 free generation attempts** and **0 original-unlock credits**.
+2. Upload exactly **5 photos**, then choose Business Formal, Business Casual or Natural Professional.
+3. Generate **1 portrait**, preview it with an embedded watermark and find it in **My Gallery**.
+4. Purchase a specific original, or spend one unlock credit, to download/share the watermark-free version.
+5. Buy more credits when needed. **Every purchase is a one-time payment: no monthly subscription or automatic renewal.**
+
+The header displays both balances; clicking them opens the purchase-options modal. Gallery supports All / Unpaid / Purchased filters, newest-first pagination with 12 photos per page, details, purchases, downloads, sharing and permanent deletion. Start over clears the current creation flow, not saved portraits.
+
+Accounts created after the welcome migration see an introductory modal on the home page. Confirmation is stored on the server, so it stays dismissed across browsers/logins. Existing accounts are not enrolled retroactively.
+
+## Prices and credit rules
+
+Current prices are in **CAD**, before eligible discounts.
+
+| Purchase | Price | Generation attempts | Original unlocks |
+| --- | --- | --- | --- |
+| One specified original portrait | CA$3.99 | 0 | Unlocks that portrait only |
+| Starter package | CA$4.49 | 3 | 1 |
+| Plus package | CA$5.49 | 5 | 2 |
+
+[src/portrait-price.mjs](src/portrait-price.mjs) defines prices and package contents. Generation/unlock balances are separate, accumulate and do not reset daily or expire while the account and service remain available. Buying an original does not add attempts or reset balances. Downloading an already-unlocked original costs no further credit.
+
+### Generation failure handling
+
+- Invalid input, failed authentication, unavailable configuration and capacity rejections do not debit an attempt.
+- Accepted generation reserves **one attempt before the provider call**.
+- A delivered portrait counts even if the user dislikes its likeness/style/expression. Deleting it does not restore the attempt.
+- **Confirmed technical non-delivery restores one attempt, at most once per request.** This includes explicit provider failures, invalid output, processing/upload failures and confirmed publication rollback.
+- Unknown provider timeouts/connections or lost database responses remain **uncertain**. The attempt stays held until the outcome is confirmed. Lease expiry alone does not restore it; some cases require operator investigation.
+
+Restoration applies only to requests accepted after its migration. Historical failures are not reimbursed automatically. Restoring an internal attempt does not move money through Stripe, alter unlock credits or reduce the site's daily usage counter.
+
+## Architecture
+
+The frontend/API run in one Node.js Next.js process. There is no Express backend, frontend proxy or port 3001 service.
+
+| Location | Responsibility |
+| --- | --- |
+| `src/App.tsx`, `src/Gallery.tsx` | Creation/results and private portrait collection |
+| `src/Header.tsx`, `src/CreditPlansModal.tsx` | Account controls, balances and purchase options |
+| `src/AccountWelcome.tsx` | New-account introduction and acknowledgement |
+| `src/useAuth.tsx`, `src/auth.ts` | Google popup/PKCE and Supabase sessions |
+| `src/server/portraits.mjs` | Validation, identity prompt and image generation |
+| `src/server/image-provider.mjs` | OpenAI/OpenRouter configuration and adapter |
+| `src/server/commerce.mjs`, `src/server/checkout-receipt.mjs` | Checkout, payment reconciliation and discounted-total verification |
+| `src/server/portrait-store.mjs` | Private Supabase database/storage access |
+| `src/legal-config.ts`, `src/app/(legal)/` | Public support details and policy pages |
+| `supabase/migrations/`, `scripts/test-*-db.py` | Schema/RPC migrations and disposable-database tests |
 
 ## Local setup
 
-Requires Node.js **22.16 or later** and npm.
+Use **Node.js 22** (`.node-version`; engines require `>=22 <23`) and npm.
 
 ```powershell
-npm install
-# Only if you do not already have .env:
+npm ci
+# Only if .env does not already exist:
 Copy-Item .env.example .env
 ```
 
-Edit `.env` locally:
+Use a separate **testing Supabase project** and **Stripe sandbox/test** credentials. Apply all required migrations below before testing generation, Gallery or credits. Configure `.env`:
 
 ```dotenv
+IMAGE_PROVIDER=openai
 OPENAI_API_KEY=your-openai-key
 OPENAI_IMAGE_MODEL=gpt-image-2
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+NEXT_PUBLIC_SUPABASE_URL=https://your-testing-project.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-public-project-key
+SUPABASE_SERVICE_ROLE_KEY=your-server-only-key
+STRIPE_MODE=test
+GENERATION_ENABLED=true
+CHECKOUT_ENABLED=false
+SUPPORT_EMAIL=forma.portraits@gmail.com
 ```
-
-The two Supabase values are public project configuration (a legacy anon key also works). Never use a Supabase secret/service_role key here. The OpenAI API key is server-only and must never have a NEXT_PUBLIC_ prefix. Do not share secrets in chat or commit .env. The previous VITE_SUPABASE_* names have been replaced by NEXT_PUBLIC_SUPABASE_*; update any environment files outside this checkout yourself.
 
 ```powershell
 npm run dev
 ```
 
-Open http://localhost:5173 or http://127.0.0.1:5173. **Port 5173 is retained deliberately**, so existing Supabase redirect URLs keep working. There is no service on port 3001. Restart the server after environment changes. Changing public environment variables also requires rebuilding for production.
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173) or [http://localhost:5173](http://localhost:5173). Port 5173 is intentional and must match Supabase's frontend redirect URLs.
 
-For a production build served locally, stop the dev server first:
+**Check environment overrides:** `.env.development.local` can override `.env`, including an old `GENERATION_ENABLED=false` or a different provider. Next.js can load `.env.production.local` during production builds/starts; verify the project before previewing a production build. A custom file such as `.env.live.local` is **not loaded automatically**. Filenames do not guarantee that keys, database and billing mode match.
+
+The example file explicitly disables generation and checkout. Enable only the operations being tested. Restart the dev server after environment changes; public `NEXT_PUBLIC_` changes require a production rebuild. Never commit keys or local environment files.
+
+For a production build on loopback, stop the dev server first:
 
 ```powershell
 npm run build
-npm start
+npm run start:local
 ```
 
-## Supabase Free + Google setup
+## Environment settings
 
-1. Create a project on the Free plan at https://supabase.com/dashboard. Copy its project URL and publishable key into the environment variables above. Authentication alone needs no migration. The paid-preview feature below DOES require the supplied SQL migration and private bucket. Free plan quotas and inactivity rules apply: https://supabase.com/pricing .
-2. In Google Cloud / Google Auth Platform, configure the consent screen and create an OAuth client of type **Web application**. Add http://localhost:5173 to Authorized JavaScript origins. For Authorized redirect URIs, use the hosted Supabase callback shown in the Google provider settings, normally https://YOUR_PROJECT.supabase.co/auth/v1/callback . This differs from the frontend callback. If Google is in Testing mode, add your own Google account as a test user.
-3. In Supabase **Authentication → Sign In / Providers → Google**, enable Google and enter its Client ID and Client Secret. Keep the Google Client Secret in the Supabase dashboard. Enable new user sign-ups and disable unused providers if you only want Google login.
-4. In Supabase **Authentication → URL Configuration**, set Site URL to http://localhost:5173 and add both exact Redirect URLs:
-   - http://localhost:5173/auth/callback
-   - http://127.0.0.1:5173/auth/callback
-5. Start the app and allow the sign-in popup. First login creates a Supabase Auth user; subsequent logins reuse it. A normal Chrome/Edge window may be needed if Google rejects an embedded browser.
+See [.env.example](.env.example) for the full template.
 
-Official setup: https://supabase.com/docs/guides/auth/social-login/auth-google and https://supabase.com/docs/guides/auth/redirect-urls . Key types: https://supabase.com/docs/guides/getting-started/api-keys .
+| Variable | Purpose |
+| --- | --- |
+| `IMAGE_PROVIDER` | `openai` (default) or `openrouter`; only the selected provider needs a key |
+| `OPENAI_API_KEY`, `OPENAI_IMAGE_MODEL` | Direct OpenAI key/model; code default is `gpt-image-2` |
+| `OPENROUTER_API_KEY`, `OPENROUTER_IMAGE_MODEL` | OpenRouter key/model; default is `openai/gpt-image-2` |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public project URL and publishable/legacy anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only service-role/secret key; never use a `NEXT_PUBLIC_` prefix |
+| `STRIPE_MODE` | `test` or `live`; must match the database billing mode |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Matching Stripe API key and endpoint/listener signing secret |
+| `STRIPE_PRICE_ID` | One-time 399-cent CAD original portrait Price |
+| `STRIPE_STARTER_PACKAGE_PRICE_ID` | One-time 449-cent CAD Starter Price |
+| `STRIPE_PACKAGE_PRICE_ID` | One-time 549-cent CAD Plus Price |
+| `GENERATION_ENABLED`, `CHECKOUT_ENABLED` | Explicit `true` enables a configured switch; defaults are off in production, on in development when omitted |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | Matching widget public key and server secret |
+| `TURNSTILE_HOSTNAME` | Exact hostname, no scheme/path; falls back to `RENDER_EXTERNAL_HOSTNAME` |
+| `APP_ORIGIN` | Trusted public origin, e.g. `https://forma.jo3.org`; falls back to Render's external URL/hostname |
+| `SUPPORT_EMAIL` | Public contact/privacy email; defaults to `forma.portraits@gmail.com` |
 
-## Account and photo flow
+Support email is read on the server by statically generated Contact/Privacy/Terms pages. Rebuild/redeploy after changing it; no `NEXT_PUBLIC_` prefix is needed. Stripe's public customer-support email is a separate Dashboard setting.
 
-Visitors can upload and choose styles. Generation requires a Google account session plus explicit photo-transmission consent. A popup and PKCE preserve the original tab's selected File objects. The callback is a real Next.js page at /auth/callback; the Supabase browser SDK exchanges the code and synchronizes the session between tabs. Blocked, cancelled and failed popups can be retried without losing photos.
+Obsolete settings `DAILY_GENERATION_LIMIT`, `UNPAID_RETENTION_DAYS` and `VITE_SUPABASE_*` do not control the current app.
 
-Supabase's SDK persists the login session in local storage and refreshes it automatically. Input photo selections remain in browser memory. Generated originals and previews are saved to private Supabase Storage. Start over clears photos but preserves login. Local sign-out clears the current page's selections/results; it does not delete the account or sign out every device. Portraits can be restored using their owned portrait URL. A per-user generation allowance and Stripe test purchase flow are included.
+## Supabase and Google authentication
 
-## API and image processing
+1. Create separate testing and production Supabase projects, with matching public/server keys in each app environment.
+2. Configure a Google **Web application** OAuth client and enable the Google provider in Supabase. Google's Authorized redirect URI is the **Supabase** callback from provider settings: `https://YOUR_PROJECT.supabase.co/auth/v1/callback`. Keep the Google Client Secret in Supabase. Add test users if Google's consent screen is in Testing mode.
+3. In the **testing** project's URL Configuration, use a local Site URL and allow both frontend callbacks:
+   - `http://localhost:5173/auth/callback`
+   - `http://127.0.0.1:5173/auth/callback`
+4. In **production**, set Site URL to `https://forma.jo3.org` and allow `https://forma.jo3.org/auth/callback`. Also allow the `www` callback if that hostname is served; use the canonical hostname consistently. Keep the old Render callback temporarily if needed.
 
-- POST /api/generate is a Node.js Route Handler. It accepts an Authorization: Bearer <Supabase access token> header, exactly five multipart photos files, one style (formal, casual, natural), and consent=true. It returns { photos: [{ id, previewUrl, downloadFilename }] }, with one WATERMARKED JPEG preview data URL; the original is never included. Failures return { error }.
-- GET /api/health returns { configured: boolean, authConfigured: boolean } without exposing credentials. API responses use Cache-Control: no-store.
-- Server-side Supabase getUser(token) verification rejects missing, expired, invalid or anonymous identities before processing photos or calling OpenAI. Unconfigured or unavailable authentication fails closed. Requests with a different Origin or cross-site fetch metadata are rejected.
-- A streaming multipart parser enforces five files, JPEG/PNG/WebP types, 10 MiB per file and a 51 MiB total request limit, including chunked requests without Content-Length. Duplicate/unknown fields and malformed bodies are rejected. Sharp fully decodes the images, rejects animated inputs and images over 40 megapixels, corrects orientation, removes metadata and fits each reference inside 1024 × 1024.
-- All five references go to the OpenAI Images edit API with n=1, size=1024x1536, quality=medium and JPEG output. Fixed prompts preserve identity while changing professional clothing, setting and lighting. Actual similarity must be evaluated manually with authorized photos.
-- Upload/decode memory is bounded to one request per Node process; the generation-protection migration additionally enforces a shared single-flight lease and a site-wide daily cap in Postgres. SDK automatic retries are disabled. Generation can take minutes; timeout or disconnect does not guarantee that processing stopped or that no charge occurred. Check usage before retrying.
+The Google-to-Supabase and Supabase-to-frontend callbacks are different. A missing frontend allowlist entry can send the popup to an old Site URL, leaving the original tab unsigned-in. Close the old popup and start a new login after correcting settings.
 
-Input photos are not saved by Forma; they are sent to OpenAI when generation is requested. Generated originals and watermarked previews are now saved in private Supabase Storage, with ownership/payment metadata in Postgres. Photo bytes are not written to application logs. OpenAI's own data policies apply: https://developers.openai.com/api/docs/guides/your-data . No zero-retention claim is made. Downloads are saved only on request. API fees are paid by the configured OpenAI account.
+Popup/PKCE login preserves uploaded File objects in the original tab. The callback exchanges the code, synchronizes the same-origin session and closes the popup. Supabase persists/refreshes sessions in browser local storage. Local sign-out clears the current flow, not the account or every device. Photo selections remain in memory.
 
-## Validation and deployment notes
+References: [Google sign-in](https://supabase.com/docs/guides/auth/social-login/auth-google), [redirect URLs](https://supabase.com/docs/guides/auth/redirect-urls), [API key types](https://supabase.com/docs/guides/api-keys).
+
+## Database migrations
+
+Apply migrations separately in testing and production, **once each, in this explicit order**. Do not rely on alphabetical order or rerun already-applied files.
+
+| Order | Migration | Purpose |
+| --- | --- | --- |
+| 1 | `20261030_paid_portraits.sql` | Portrait/payment records and private bucket |
+| 2 | `20261031_purchase_generation_allowance.sql` | Historical allowance implementation |
+| 3 | `20261031_personal_gallery.sql` | Permanent Gallery retention/deletion |
+| 4 | `20261118_generation_protection.sql` | Request IDs, global lease, caps and atomic publication |
+| 5 | `20261118_purchase_credits.sql` | Additive generation/unlock balances and orders |
+| 6 | `20261119_stripe_modes.sql` | Test/Live isolation and operator-only activation |
+| 7 | `20261119_stripe_modes_cad.sql` | CAD reservations, historical USD preservation |
+| 8 | `20261119_stripe_modes_preserve_credits.sql` | Live activation preserves balances |
+| 9 | `20261119_stripe_promotions.sql` | Discounted/zero-total fulfillment and receipts |
+| 10 | `20261119_new_account_welcome.sql` | New-account welcome eligibility/acknowledgement |
+| 11 | `20261119_credit_package_options.sql` | Starter 3+1 and Plus 5+2 snapshots |
+| 12 | `20261119_restore_failed_generation.sql` | Exactly-once technical-failure restoration |
+
+Existing deployments should apply **only missing migrations**. Historical files contain older rules intentionally replaced by later migrations. Ordinary schema migration does not activate Live or reset balances. Welcome eligibility starts after migration 10; restoration eligibility starts with requests accepted after migration 12.
+
+Back up the database and pause generation before rollout. For payment/credit changes, stop app instances, webhook/reconciliation handlers and cleanup workers while applying SQL and switching code. Flags alone do not stop payment confirmations. Resume only with matching schema/code; retired RPCs are deliberately inaccessible to the backend role. Verify testing before upgrading production. Never execute database fixture scripts against hosted projects.
+
+## Image generation and prompt
+
+Direct OpenAI uses the Images edit endpoint. Choose an edit-compatible model with `OPENAI_IMAGE_MODEL`, then restart/redeploy; the code fallback remains `gpt-image-2`. Model changes need no migration. There is no automatic model upgrade, provider failover, Batch integration or paid retry.
+
+OpenRouter supports these exact IDs and provider-specific settings:
+
+| Model | Settings |
+| --- | --- |
+| `openai/gpt-image-2` | 1024×1536, medium, JPEG |
+| `qwen/qwen-image-2.1-turbo` | 1K, 2:3 |
+| `bytedance-seed/seedream-5-0-flash` | 1K, 2:3, JPEG |
+| `bytedance-seed/seedream-5-5` | 1K, 2:3, JPEG |
+| `google/gemini-nano-banana-2.1` | 1K, 2:3 |
+
+The OpenRouter adapter sends all five references as data URLs, disables provider fallback and uses `data_collection: deny` to exclude endpoints that train on inputs. This is not a zero-retention guarantee. OpenAI and OpenRouter model names/settings are separate. Remote output URLs are not downloaded; responses are bounded to 30 MiB, decoded originals to 40 megapixels/20 MiB JPEG.
+
+The current prompt in [src/server/portraits.mjs](src/server/portraits.mjs) combines a shared portrait instruction with the selected style:
+
+- Generate one photorealistic head-and-shoulders portrait of the same person shown in all five references.
+- Use all references to preserve recognizable identity, facial proportions, skin tone, age, hairstyle and natural skin texture.
+- Avoid blending identities, changing ethnicity, reshaping the face or applying heavy beauty retouching.
+- Request a camera-facing subject with a **relaxed, confident expression**. The prompt does not explicitly require a smile or choose a primary reference image.
+- Apply the selected clothing, background and lighting description, with no text, watermark or collage. Forma adds its own preview watermark after generation.
+
+Prompt instructions do not guarantee likeness. Evaluate with the same consented photos, style and model; automated tests verify the request flow, not visual similarity. Direct OpenAI still requests one image at `1024x1536`, `medium` quality, JPEG output.
+
+There is no fixed seed. Separate new Generate requests using the same photos can produce different results, each using an attempt under the rules above. Replaying/checking the **same request ID** retrieves its outcome without a new provider call or debit.
+
+## Validation, protection and recovery
+
+The Node route verifies Supabase bearer identity, origin, consent and style. It accepts exactly five JPEG/PNG/WebP files, up to 10 MiB each and 51 MiB total multipart input. Duplicate/unknown fields, malformed bodies, animations and images over 40 megapixels are rejected. Sharp corrects orientation, strips metadata and fits references within 1024×1024 without upscaling.
+
+Reference uploads remain in application memory and are sent to the selected AI provider. Forma does not save them as Gallery objects or log their bytes. Third-party processing follows provider policies; no zero-retention promise is made. Provider fees occur before the user decides to purchase.
+
+Initial database controls are:
+
+- **20 accepted attempts per UTC day across the site**, independent of user balances/package purchases. Account-credit restoration does not reduce this counter.
+- **One global generation lease for 15 minutes**, plus one upload/decode request per Node process. Success/confirmed failure releases the lease; uncertain work retains it until expiry. Expiry does not prove upstream work stopped.
+- **512 MiB portrait-bucket budget**, counting stored bytes plus 21 MiB per unresolved/new request. This is an app budget, not the full Supabase quota.
+- **Six generation POST requests per account per fixed UTC minute**, before buffering photos; not a cross-account/IP-level limit.
+
+An operator can pause via `forma_generation_control.paused`. Inspect provider usage, private storage and unresolved requests before resuming. No raw CAPTCHA token, reference photo, secret or client IP is stored in generation records.
+
+Each accepted request has a UUID `Idempotency-Key`, owner, style and input fingerprint. Reusing an ID with different photos/style conflicts. The browser stores only its pending UUID in per-account sessionStorage, then checks status after reload instead of resubmitting.
+
+`forma_finish_generation_restoring` atomically marks confirmed failure and restores one attempt, with `restored_at` preventing duplication. Billing/global/account/request locks coordinate restoration with payment and publication. A request cannot both publish successfully and restore. Deleted successful portraits keep a request tombstone and stay charged.
+
+Unknown provider/publication outcomes remain held, with possibly committed files preserved. After confirming terminal non-delivery, an operator/backend may resolve using `forma_finish_generation_restoring(owner_uuid, request_uuid, false)`. Never mark failure based only on expiry or a missing photo. Transaction failure rolls back both status and balance. Private orphaned uploads may need operator cleanup and continue counting toward storage capacity.
+
+## Stripe setup and fulfillment
+
+Create separate one-time **CAD** Prices in the matching Stripe environment for originals, Starter and Plus. Suggested Product names: Forma Portrait, Forma Starter Package and Forma Plus Package. The server checks active status, mode, amount, currency and one-time pricing; browser-supplied amounts/credit counts are not trusted.
+
+Restricted-key permissions used are **Checkout Sessions Write** and **Prices Read**. Hosted Checkout needs no frontend Stripe publishable key. Configure `/api/stripe/webhook` for `checkout.session.completed` and `checkout.session.async_payment_succeeded`.
+
+For local sandbox forwarding:
+
+```sh
+stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded --forward-to http://127.0.0.1:5173/api/stripe/webhook
+```
+
+Set the listener's signing secret in `STRIPE_WEBHOOK_SECRET`; it differs from a Dashboard endpoint secret. Enable checkout only after keys, all three CAD Prices, webhook and database mode match. Use Stripe test payment details in sandbox, not real card details.
+
+### Promotion codes and payment validation
+
+New Sessions allow customer-facing promotion codes. Configure coupons/codes, expiry, product restrictions and redemption limits in Stripe. Percentage/fixed discounts and verified 100% discounts are supported. `Duration: Once` is not a per-user usage limit. Product-restricted codes must include any newly created package Products. Google sign-in alone does not associate an account with a customer-restricted Stripe code.
+
+Signed webhooks and authenticated status refresh retrieve Stripe line items and verify owner, saved Session/idempotency snapshot, mode, quantity, Price ID, subtotal, currency, applied discounts and totals. A zero-total order requires a completed/settled Session and a verified full discount; no PaymentIntent is required. A success redirect alone never grants access or credits.
+
+Package fulfillment marks the order paid, grants its saved **3+1 or 5+2** and inserts a private receipt in one transaction, once only. Original payment unlocks only that photo. Receipts preserve original price, discount, tax components, actual total and discount references. Later coupon expiry does not invalidate a completed purchase.
+
+One pending checkout is allowed per account **per package**; Starter never silently reuses Plus. Existing reservations retain their creation parameters/idempotency key; older ones may lack code entry. Historical USD/test records retain their original snapshots. Reconcile lost Session IDs/creation responses in Stripe before clearing or replacing anything. Expired idempotency windows fail closed rather than risking duplicate payment.
+
+### First Live activation
+
+Use separate testing/production Supabase projects. A fresh database starts in `test` mode even if Live keys exist. For its **first deliberate Live cutover only**, after all migrations and with app/payment processing stopped, an operator can run:
+
+```sql
+select public.forma_activate_live('ACTIVATE LIVE AND PRESERVE EXISTING CREDITS');
+```
+
+This is not a routine deployment step and is inaccessible to browser/service-role clients. It preserves balances, photos and unlocked originals, expires pending test package orders and clears unpaid test reservations. It does not grant new free credits or reset accounts. Cutover is one-way, once-only, transactional and blocked by an active generation lease. The historical reset-to-2/0 confirmation is rejected; do not manually reverse production mode.
+
+Set `STRIPE_MODE=live`, matching Live API/webhook keys and all three Live CAD Prices before enabling production checkout. Stripe public support/policy details must be updated separately. A free discounted checkout tests fulfillment, not real card charging. This integration does not enable automatic tax.
+
+References: [Stripe keys](https://docs.stripe.com/keys), [fulfillment](https://docs.stripe.com/checkout/fulfillment), [webhooks](https://docs.stripe.com/webhooks).
+
+## Gallery storage, deletion and sharing
+
+The `forma-portraits` bucket is private. The backend saves a clean original plus a preview with repeated FORMA PREVIEW marks embedded in its pixels, not a CSS overlay. Before unlock, only the preview is served. Purchased thumbnails/details show the original. Every list/detail/image/download validates ownership; responses are `no-store`, with no public original or signed Storage URL.
+
+Portraits do not expire. Thumbnails use authenticated requests and temporary Blob URLs released on unmount. Account changes clear account-specific UI; lists return sanitized metadata/opaque cursors, not storage paths.
+
+Deletion requires explicit confirmation matching the displayed paid state. Open unpaid Sessions are expired/reconciled first; pending/unresolved payments block deletion. Newly discovered payment is fulfilled and needs fresh confirmation. Storage failures leave a hidden `deleting` record for safe retry. Cleanup resumes only these owner-confirmed deletions:
+
+```powershell
+npm run cleanup:portraits
+```
+
+There is no age-based expiry cleanup. Do not run obsolete cleanup jobs against this schema. Physically deleted photos cannot be recovered.
+
+Purchased originals support downloads and X/LinkedIn/Facebook/other-app sharing. Native file sharing depends on browser/device support and a secure context. Desktop fallbacks download the JPEG and open the destination for manual attachment. Forma does not automatically publish, connect social accounts or expose private image URLs; opening a composer/share sheet is not proof of posting.
+
+## API overview
+
+App endpoints below require Supabase bearer authentication except health/readiness; mutations validate origin where applicable. Stripe webhooks use signature verification instead. Private responses disable caching.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/generate` | Five multipart `photos`, `style`, `consent=true`; UUID `Idempotency-Key`; Turnstile header as configured |
+| `GET /api/generation-requests/:id` | Owner-only `{request:{id,status,portraitId,attemptRestored}}` |
+| `GET /api/generation-allowance` | `{remaining,unlocks,mode}` |
+| `GET /api/account-welcome`, `POST /api/account-welcome` | Read eligibility / acknowledge the current account's welcome |
+| `GET /api/portraits` | Gallery filters and cursor pagination |
+| `GET /api/portraits/:id` | Preview/original and paid status |
+| `GET /api/portraits/:id/thumbnail` | Authenticated JPEG, up to 480×640 |
+| `GET /api/portraits/:id/download` | Paid/unlocked JPEG attachment; 402 before unlock |
+| `POST /api/portraits/:id/checkout` | Original purchase |
+| `POST /api/portraits/:id/unlock` | Spend one unlock credit once |
+| `DELETE /api/portraits/:id` | Delete with `{confirm:true,paid:boolean}` |
+| `POST /api/credit-packages/checkout` | JSON `{"package":"starter"}` / `{"package":"plus"}`; empty legacy requests default to Plus |
+| `GET /api/credit-packages/:id` | Owner-only order status/payment reconciliation |
+| `POST /api/stripe/webhook` | Signed completion events |
+| `GET /api/health` | Configuration-presence booleans, no credentials |
+| `GET /api/ready` | Read-only deployment readiness, 200/503 |
+
+Request states are `running`, `succeeded`, `failed` and `uncertain`; expired running leases read as uncertain. Failures include an error and, where applicable, stable code/request ID/restoration flag. Common codes include `generation_allowance_exhausted`, `generation_busy`, `site_generation_limit`, `generation_storage_limit`, `generation_rate_limited`, `human_verification_failed`, `request_conflict`, `generation_failed` and `generation_uncertain`. Never automatically resubmit unknown outcomes.
+
+## Render, custom domain and Turnstile
+
+Use a Node.js Render **Web Service** for `kazexd/forma`, branch `main`:
+
+- Build: `npm ci && npm run build`
+- Start: `npm start` (binds `0.0.0.0` and Render's `PORT`, fallback 5173)
+- Health check: `/api/ready`
+- Auto-deploy: After CI Checks Pass, or manual deployment after CI succeeds
+- `NODE_ENV=production`; optional `CIRCLE_NODE_TOTAL=3` bounds build workers
+
+Static export is unsupported. Hosting upload/execution limits still apply; `maxDuration` is a hint. Initial deployment can keep both operation flags false while validating auth, schema and private storage.
+
+For the custom domain:
+
+1. Add `forma.jo3.org` in Render, configure the required DNS records and wait for verification/valid HTTPS. A CNAME editor labelled Alias is not necessarily an apex-flattening ALIAS implementation.
+2. Set `APP_ORIGIN=https://forma.jo3.org` and `TURNSTILE_HOSTNAME=forma.jo3.org` in Render. Use the same canonical hostname in the browser.
+3. Update the **production** Supabase Site URL and exact frontend callback allowlist. Google's Supabase callback stays separate.
+4. Add `forma.jo3.org` to the existing Turnstile widget's Hostname Management. Existing keys remain usable for the same widget. Hostnames have no scheme/path.
+5. Rebuild/redeploy, then test sign-in popup return, human verification, Gallery, generation and payment return. Keep any old `onrender.com` webhook working until it is deliberately migrated.
+6. Update Stripe's public website/contact/privacy/terms links to the new domain and its public support email separately.
+
+Turnstile is mandatory in production. The backend checks success, exact hostname and action `generate_portrait`; a token hash prevents replay. Development skips verification only when neither key is configured; partial settings fail closed. Use a separate suitable test configuration for localhost. **Current `/api/ready` generation checks require full Turnstile settings even in development**, so the local generation route can work without keys while readiness reports false. Production requires the full configuration in both places.
+
+Readiness checks private bucket metadata, portrait/allowance columns, required RPC names, Google enablement, billing mode and enabled-operation configuration. It makes no mutating RPC/model/Stripe calls, coalesces requests and caches results for 30 seconds with a four-second network deadline. It does not establish key validity, model billing, Stripe Price correctness or successful payment. `/api/health` likewise reports presence, not upstream validity.
+
+## Tests and CI
 
 ```powershell
 npm test
@@ -73,281 +322,45 @@ npm run typecheck
 npm run build
 ```
 
-Tests cover UI state, authentication/popups, API errors, streaming upload limits, image validation and generation concurrency. Backend tests call standard Request/Response handlers with fake Supabase/OpenAI clients; no paid requests or real Google sign-in occurs. Live OAuth and generated image quality still need verification with your credentials.
+[CI](.github/workflows/ci.yml) runs for pushes/PRs to `main`: Node 22, `npm ci`, frontend/backend Vitest, disposable PostgreSQL 17 migration/transaction tests, then production build. Generation/checkout are disabled. New runs on the same ref cancel older ones.
 
-The production app needs a Node.js Next.js server; static export is not supported because the API is dynamic. Route Handlers explicitly use the Node runtime for Sharp/stream processing. Hosting platforms may impose smaller upload limits and shorter execution limits than the app permits; the exported maxDuration is only a platform hint. Per-user attempt quotas are enforced atomically in Postgres; public deployment still needs additional abuse/rate controls. No deployment is included in this migration.
+The current DB entrypoint, `scripts/test-generation-restoration-db.py`, runs the full historical chain. It covers ownership/permissions, exactly-once package/discount fulfillment, welcome state, restoration, publication-versus-failure races, concurrent payments/debits, rollback and historical snapshots.
 
-Illustrative style photos are local stock assets, not generated results or endorsements. Sources: public/photos/SOURCES.txt; license: https://unsplash.com/license .
+Run manually only against a **fresh disposable** Docker database named `forma_test`:
 
+```powershell
+docker run --rm -d --name forma-db-test -e POSTGRES_PASSWORD=disposable-only -e POSTGRES_DB=forma_test postgres:17-alpine
+# Wait for PostgreSQL readiness before running tests.
+docker exec forma-db-test pg_isready -U postgres -d forma_test
+python scripts/test-generation-restoration-db.py forma-db-test
+docker stop forma-db-test
+```
 
-## Watermarked previews + Stripe test purchases
+Fixture scripts create schemas/roles and exercise historical mode transitions: never use an existing app database. Vitest uses injected providers and synthetic events, not paid generation, real Google login or card charges. Real image likeness and OAuth/Turnstile/checkout need separate end-to-end checks. CI does not apply hosted migrations, configure dashboards, confirm a Render deployment or run browser E2E tests.
 
-### Required setup before generating
+## Troubleshooting
 
-1. In Supabase SQL Editor, run supabase/migrations/20261030_paid_portraits.sql ONCE. It creates server-only portrait/payment records, historical daily attempt reservations, and a private forma-portraits bucket. RLS and grants deny browser access to records and objects, including originals. Do not add permissive client policies for this bucket or make it public.
-2. Put your Supabase service_role key (or server secret key) in SUPABASE_SERVICE_ROLE_KEY in your local .env. It is used only by backend modules. Never prefix it with NEXT_PUBLIC_ or put it in the browser. The existing public Supabase URL/key remain unchanged.
-3. Apply all migrations in the order below, including `20261118_purchase_credits.sql`. New accounts receive 3 free generation attempts; existing balances are preserved. Apply the personal-gallery migration below; paid and unpaid portraits no longer expire. Reservations occur after valid photo processing but before an OpenAI call, so unsuccessful upstream attempts also count. This conservative accounting avoids accidentally treating possibly billed attempts as free.
-4. Restart npm run dev. Storage is checked BEFORE generation; missing schema, missing service key or a public bucket blocks generation before an OpenAI call. The live configuration was not provisioned automatically.
+| Symptom | Check |
+| --- | --- |
+| Generation temporarily unavailable | `GENERATION_ENABLED=true`, including `.env.development.local` overrides; restart |
+| Checkout temporarily unavailable | `CHECKOUT_ENABLED=true` in the intended environment |
+| Image provider not configured | Selected provider has its own key; an OpenAI key does not configure OpenRouter |
+| `401 expired_secret_key` | Replace the effective OpenAI key; presence does not establish validity |
+| Login only inside popup/on old domain | Supabase Site URL and current-origin `/auth/callback` allowlist; restart sign-in |
+| Turnstile fails | Widget hostname allowlist, matching keys, backend hostname, network/extensions and Cloudflare error code |
+| Private storage unavailable | All migrations, matching project/server key and private bucket |
+| Uncertain attempt | Check request/Gallery; do not blindly regenerate or restore based only on timeout |
+| Starter checkout unavailable | Matching active one-time 449-cent CAD `STRIPE_STARTER_PACKAGE_PRICE_ID` |
+| Payment pending | Authenticated refresh/webhook delivery; success URLs are not proof |
+| CI passed but old UI/endpoint remains | Verify the deployed Render commit separately |
+| Support email unchanged | Set `SUPPORT_EMAIL`, rebuild static pages and update Stripe separately |
 
-### Stripe sandbox/test setup
+## Contact, policies and assets
 
-1. Create or open your Stripe test environment. Create a product for one watermark-free portrait with a fixed, one-time **CA$3.99 CAD** test price. Set its price_... ID in STRIPE_PRICE_ID. The UI displays this price and the backend rejects Stripe prices with any amount other than 399 cents or any currency other than cad. Also create a one-time **CA$5.49 CAD** package price and set STRIPE_PACKAGE_PRICE_ID. Shared prices are defined in src/portrait-price.mjs.
-2. Put a TEST secret key (sk_test_...) in STRIPE_SECRET_KEY. Keep `STRIPE_MODE=test` for sandbox testing. Keys, Prices, sessions, webhook events and database mode must match; see the separate Live preparation section before using live settings. No Stripe publishable key is needed for hosted checkout.
-3. Install the official Stripe CLI and sign in, then forward events while the Next.js app runs:
+Public pages: [Contact](https://forma.jo3.org/contact), [Privacy Policy](https://forma.jo3.org/privacy), [Terms](https://forma.jo3.org/terms). Operator: Zephyr Wong, Ontario, Canada. Support/privacy email defaults to `forma.portraits@gmail.com` via `SUPPORT_EMAIL`.
 
-~~~sh
-stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded --forward-to http://localhost:5173/api/stripe/webhook
-~~~
+Account/privacy requests are handled manually. Verify ownership and inspect dependent payment/security records before account closure. Gallery deletion does not immediately erase provider backups, Stripe records or all request metadata. The app does not automatically handle account deletion or payment disputes.
 
-4. Copy that listener's whsec_... signing secret into STRIPE_WEBHOOK_SECRET, then restart Next.js. Keep the listener running for local test purchases. A CLI webhook secret is different from a dashboard endpoint's secret.
-5. Generate a portrait, inspect its watermarked preview, then click Buy watermark-free original. Use Stripe's test card 4242 4242 4242 4242, a future expiry and any three-digit CVC. Do not enter real payment details for this test flow.
-6. After checkout, the app restores the portrait from its ID and polls for verified payment confirmation for about 30 seconds; Refresh purchase status remains available. A checkout=success URL alone never unlocks a download. A signed webhook or an authenticated status refresh independently retrieves the saved Checkout Session from Stripe. Access is granted only for a paid test session matching the recorded owner, portrait, checkout key, amount, currency and session. Status refresh can recover purchases when local webhook forwarding is interrupted.
+Illustrative style photos are local stock assets, not generated results or endorsements. See [public/photos/SOURCES.txt](public/photos/SOURCES.txt) and the [Unsplash license](https://unsplash.com/license).
 
-Official payment guidance: https://docs.stripe.com/checkout/fulfillment.md?ui=full-page . Storage privacy: https://supabase.com/docs/guides/storage/buckets/fundamentals .
-
-### Storage, purchase and download behavior
-
-The original stays in private Storage. Sharp produces a separate JPEG preview fitting 600 × 900, with repeated vector-letter FORMA PREVIEW marks rendered into its pixels. No CSS-only watermark or original signed URL is sent before payment. Preview/download endpoints validate the owner on every request. Purchased screens show the clean original; Download original fetches clean bytes through an authenticated, no-store attachment endpoint. The original was generated once; buying it does not regenerate it.
-
-GET /api/portraits/:id returns the owner's watermarked preview before purchase and the watermark-free original after verified payment, along with payment status. POST /api/portraits/:id/checkout creates or reuses a server-priced, idempotent Checkout Session in the configured mode. GET /api/portraits/:id/download returns 402 before purchase and original bytes only after payment. POST /api/stripe/webhook verifies the raw signature and handles duplicate deliveries safely. No endpoint lets the browser set paid=true.
-
-Both paid and unpaid portraits remain saved privately until their owner explicitly deletes them. There is no expiry-based deletion. Monitor Supabase storage and egress as collections grow.
-
-The cleanup command only resumes owner-confirmed deletions already marked `deleting`; it never selects portraits by age:
-
-~~~sh
-npm run cleanup:portraits
-~~~
-
-If a checkout reservation has no saved Stripe session ID, deletion is blocked for manual recovery. Locate its session using the portrait/checkout metadata in Stripe before clearing anything. Failed image uploads attempt compensating deletion; inspect storage for orphaned objects after infrastructure failures.
-
-The new storage and checkout integration is tested with injected service clients and synthetic signed events. A real Supabase migration, Stripe test price, signing secret and full sandbox round trip must be completed before the feature is ready for end users. Payment-dispute handling and legal/support policies remain separate launch tasks. Live activation requires the explicit operator-only cutover described below. OpenAI costs occur before the customer decides to purchase, and watermark removal cannot be made impossible.
-
-## Sharing a purchased portrait
-
-After the server reports a portrait as paid, the result screen offers X, LinkedIn, Facebook and Other apps. Choosing one fetches the original JPEG through the same authenticated, payment-protected download endpoint. The file stays in page memory and is reused when switching destinations; it is not made public or uploaded to another service automatically.
-
-On browsers/devices supporting Web Share file attachments, a separate Share photo button invokes the device share sheet directly from a fresh click. Choose the installed app yourself and complete the post there. Forma cannot force a particular target app, and opening/closing a share sheet is not proof that a social post was published. Cancellation leaves the file available for another attempt.
-
-For desktop/unsupported browsers, Download photo saves the purchased JPEG. Open X opens its text composer; Open LinkedIn and Open Facebook open their feeds. Attach the downloaded photo manually. Those links do not auto-attach files or contain the private portrait URL, a storage URL, portrait ID or auth token. Copy caption copies only a short suggested caption, with manual-copy guidance if clipboard access fails. Other apps supports the same native file share or manual-download flow for messaging/social apps.
-
-No social account connection, posting API permissions, new public photo endpoint, database migration or additional Stripe/OpenAI call is required for sharing. Actual share targets depend on the device; native sharing requires browser support and a secure context (local development on loopback is treated specially by browsers). Capability is checked using navigator.canShare({files}).
-
-Web Share behavior reference: https://developer.mozilla.org/en-US/docs/Web/API/Navigator/share .
-
-
-### Generation and original-unlock credits
-
-Apply `supabase/migrations/20261031_purchase_generation_allowance.sql`, `20261031_personal_gallery.sql`, `20261118_generation_protection.sql`, then `20261118_purchase_credits.sql` in that order. The first migration is historical: the final migration replaces its purchase-reset behavior. Pause the application, generation, checkout, payment reconciliation/webhooks and cleanup while migrating and switching versions. Flags alone do not pause webhooks or detail reconciliation. Stripe retries webhook deliveries after the new release resumes. Do not run old application code against the final schema.
-
-New accounts receive 3 generation attempts and 0 unlock credits. Existing balances and purchased originals are preserved; historical purchases are not replayed and no new free allowance is granted during migration. Generation and unlock credits accumulate, have no expiry, and are separate balances. A validated accepted generation consumes one attempt before calling the image provider; confirmed technical non-delivery restores that attempt once under the new restoration migration; uncertain outcomes remain held until confirmed. A delivered portrait still counts if the user dislikes it. Invalid input/configuration does not debit. Site caps and leases still apply, even with purchased credits.
-
-A one-time CA$3.99 CAD purchase unlocks one specified original and does not change either balance. A one-time CA$5.49 CAD package adds 5 generation attempts and 2 original-unlock credits. Packages may be purchased repeatedly. Each credit unlocks any one owned unpaid portrait in My Gallery or the result page. Repeated unlock requests for the same portrait debit once. Downloading, sharing and deleting never restore credits. Payment-dispute handling remains outside this version.
-
-`GET /api/generation-allowance` requires authentication and returns `{remaining,unlocks,mode}` without caching, with no fixed balance limit of 3. `POST /api/credit-packages/checkout` creates/reuses one pending Stripe test checkout per account. `GET /api/credit-packages/:id` checks ownership and reconciles verified payment. `POST /api/portraits/:id/unlock` requires authentication and same-origin validation. Original downloads remain paid/unlocked only.
-
-Package orders store server-validated price snapshots and durable Stripe idempotency IDs. Signed webhooks and authenticated refresh share the same fulfillment path. PostgreSQL grants both balances and marks the order paid in one transaction, once only. Wrong account, session, amount/currency, unpaid or wrong-mode sessions never grant credits. Package grants, original payments, credit unlocks and generation debit serialize on the account row. Unlock and deletion compare the exact portrait/checkout snapshot under a row lock. An open single-photo checkout is expired first; successful payment is fulfilled instead of spending an unlock credit, and unresolved/processing payment blocks redemption. If a package session ID was lost and its creation deadline has elapsed, checkout fails closed for operator reconciliation rather than risking a duplicate session. Never manually expire such an order without checking Stripe.
-
-Stripe setup: create two active one-time **test** Prices in CAD: 399 cents (`STRIPE_PRICE_ID`) and 549 cents (`STRIPE_PACKAGE_PRICE_ID`). Never reuse the old US$1 price or edit its historical snapshots. Existing completed payments remain fulfillable at their recorded price without granting generation attempts. Open legacy-priced checkouts are expired before starting a new checkout; unresolved reservations may require operator reconciliation. Keep `CHECKOUT_ENABLED=false` until migration, both new prices, webhook delivery and end-to-end sandbox tests are complete. Live Stripe keys are rejected unless `STRIPE_MODE=live` and the database has been explicitly activated.
-
-The frontend provides balance refresh, package checkout and return-status polling in Create and My Gallery. Redirect query strings are never proof of payment. Account changes/unmount clear the gallery and pending UI. A failed verification displays an error without revealing provider details. Use `python scripts/test-credits-db.py <fresh-disposable-postgres-container>` for the full historical migration chain and current package/unlock transaction tests; CI runs this against an isolated database.
-
-## My Gallery and permanent storage
-
-Visit `/gallery` or use **My Gallery** in the header. Sign-in is required. The gallery shows your own portraits only, newest first, 12 at a time with All / Unpaid / Purchased filters and Load more. Thumbnails are fetched with bearer authentication and held in temporary Blob URLs that are revoked on unmount. Unpaid thumbnails and details use the embedded watermarked preview; paid ones use the original. Open a card to purchase, refresh payment status, download or share a purchased original. Checkout returns to the existing result page, with a View my gallery link. Start over never deletes stored portraits.
-
-**Upgrade:** stop old app instances, webhook handlers, and especially all old expiry cleanup jobs. Apply `supabase/migrations/20261031_personal_gallery.sql` once, after both earlier migrations. Deploy/restart the matching app and webhook forwarding. This makes `expires_at` nullable, clears existing expiry dates, and replaces checkout reservation expiry restrictions. Existing rows marked deleting by old expiry cleanup are restored to unpaid/paid if still present; images already physically deleted cannot be recovered. Remove the obsolete `UNPAID_RETENTION_DAYS` variable. Never run the old cleanup executable against the upgraded schema.
-
-`GET /api/portraits?status=all|unpaid|purchased&cursor=...` returns sanitized metadata and an opaque next cursor, never storage paths. `GET /api/portraits/:id/thumbnail` returns a private resized JPEG (maximum 480 × 640). All list/detail/image responses are no-store. Storage remains private; there are no public image URLs.
-
-`DELETE /api/portraits/:id` requires bearer authentication, same-origin verification, and `{confirm:true,paid:boolean}` matching the state shown in the confirmation. Both original and preview are permanently deleted. Purchased deletion warns users to download first; it does not change generation allowance. An open unpaid Stripe session is expired first. Pending payments/unresolved reservations block deletion. A newly discovered paid session is fulfilled and requires a fresh purchased-image confirmation. Snapshot comparisons in Postgres prevent a concurrent checkout or payment from being overwritten. Storage failures leave a hidden `deleting` row for safe retry or the cleanup command. Repeated deletion of an already absent portrait succeeds without revealing other users' records.
-
-For isolated database checks, start a disposable Postgres container with `POSTGRES_DB=forma_test`, then run `python scripts/test-allowance-db.py <container-name>`. The checks include allowance transactions and gallery migration/deletion races. This script creates test schemas and must never target an existing application database.
-
-
-## First Render deployment (operations closed)
-
-This prepares an online installation only. Public launch, abuse controls and Stripe Live activation remain separate release steps. Node 22 is selected by `.node-version` and the package engines range. `npm start` runs the built app on `0.0.0.0` and Render's `PORT` (fallback 5173). `npm run dev` stays on loopback; `npm run start:local` is available for a loopback production preview. Build-time `NEXT_PUBLIC_` settings must belong to the same Supabase project used at runtime; changing them requires rebuilding.
-
-Deployment switches are server-only: `GENERATION_ENABLED` and `CHECKOUT_ENABLED`. Both default to disabled when `NODE_ENV=production`; elsewhere they default to enabled when omitted. Only the exact value `true` enables an explicitly configured switch. Copying `.env.example` explicitly disables both even in local development; set them to `true` in the local test environment if needed. Disabled operations return 503 before allowance reservation, OpenAI requests or Stripe Checkout creation. Existing paid downloads, signed webhook handling, payment reconciliation, credit redemption and deletion stay available.
-
-Before deploying, run CI (`npm test` and `npm run build`). GitHub Actions does this for main pushes and pull requests without credentials. In Render, create a **Web Service**, connect `kazexd/forma`, choose `main`, leave Root Directory blank, and select **Free**. Use:
-
-- Build Command: `npm ci && npm run build`
-- Start Command: `npm start`
-- Health Check Path: `/api/ready`
-- Auto-Deploy: **After CI Checks Pass** (or disable automatic deployment and deploy manually only after CI passes)
-
-Set these Render environment variables before the first build:
-
-- `NODE_ENV=production`
-- `CIRCLE_NODE_TOTAL=3` (bounds Next.js build workers to two; no runtime scaling change)
-- `GENERATION_ENABLED=false`
-- `CHECKOUT_ENABLED=false`
-- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`: copy production values directly into Render, never GitHub or chat.
-
-OpenAI and Stripe secrets can stay unset while both operations are closed. Do not upload `.env.production.local`; Next.js reads Render's settings directly. Production Google auth must be enabled in Supabase. A later step adds the actual Render HTTPS origin and `/auth/callback` to the production OAuth redirect configuration. Merely inserting a live key does not enable real checkout: `STRIPE_MODE`, database mode, Prices and webhook settings must match, and checkout must be enabled separately.
-
-`GET /api/health` remains the lightweight configuration endpoint. `GET /api/ready` reports only `{ready:true|false}` with no-store headers and HTTP 200/503. It checks private bucket metadata, portrait/allowance table columns, required RPC names in the server-authorized schema, and the public Google provider configuration. These are read-only requests: no user creation, generation, allowance reservation, Stripe requests or database RPC execution. Probes have a 4-second network deadline, are coalesced, and are cached for 30 seconds to avoid a Supabase round trip for every Render health check. Failed checks do not leak provider errors or credentials. When operations are explicitly enabled it also checks the corresponding local key/config presence; it does not validate upstream OpenAI billing or process payments.
-
-After deployment, record the `https://...onrender.com` URL and verify readiness, sign-in setup and gallery access while generation and checkout remain closed. Render Free may sleep, restart or exhaust its included resources; this deployment does not remove those limitations or make the public paid launch complete.
-
-
-## Generation protection rollout (keep both operation switches false)
-
-After setting production Turnstile keys in Render, apply `supabase/migrations/20261118_generation_protection.sql` once to each environment that will run this version. Keep `GENERATION_ENABLED=false` and `CHECKOUT_ENABLED=false` throughout migration and deployment. The migration replaces the unguarded account-debit RPC with `forma_begin_generation` and adds request records, rate limits, a global lease and atomic portrait publishing. Do not roll back to application code that calls the retired `forma_consume_generation` RPC. The old debit RPC remains a fail-closed stub so the previous release’s read-only readiness probe stays healthy. New readiness checks require all new RPCs; apply the migration before deploying. Existing portraits and account balances are preserved; apply the subsequent purchase-credits migration to replace historical purchase resets.
-
-Render variables (set before rebuilding):
-
-- `NEXT_PUBLIC_TURNSTILE_SITE_KEY`: production widget's public sitekey, compiled into the browser bundle.
-- `TURNSTILE_SECRET_KEY`: server-only secret, never in a public variable.
-- `TURNSTILE_HOSTNAME=forma-production.onrender.com`: exact hostname, no scheme/path. If omitted, the server uses Render's `RENDER_EXTERNAL_HOSTNAME`. Keep the widget's hostname allowlist in sync.
-
-The widget uses Managed mode with action `generate_portrait`, explicit rendering, token-expiry/error callbacks, and a fresh challenge after each attempt. Siteverify is mandatory in production even if keys are missing; missing settings fail closed. Unconfigured local development skips the widget/provider only when neither Turnstile key is present. Use Cloudflare test keys in a separate local test configuration if needed, not the production widget on localhost. Tokens travel in `X-Turnstile-Token`, not photo form fields. The backend checks Cloudflare success, exact hostname and action. A token hash is also unique in Postgres because Cloudflare's token-reuse detection is eventually consistent; a concurrent token replay cannot grant another paid generation. No raw token, secret, IP address, or input image is stored in request records.
-
-Initial controls in `forma_generation_control` (server-only):
-
-- 20 accepted upstream attempts per UTC day across the entire site; credit-package purchases add account attempts without changing this site counter.
-- One global active generation lease for 15 minutes. Normal success or an explicit upstream rejection releases it immediately. Network timeouts/unknown outcomes retain it until expiry; a new request may proceed afterward, but the old request is never automatically resubmitted. A provider might continue processing after an API timeout, so a lease is not proof that an uncertain upstream task stopped.
-- 512 MiB budget for the portrait bucket. Before a new call, count stored object sizes and reserve 21 MiB per running/uncertain request plus the new attempt. This conservatively covers the bucket's maximum original and a preview, and may pause earlier when requests need operator reconciliation. This is an application budget, not a guarantee covering all Supabase buckets, database size, egress or provider quotas.
-- Six generation POST requests per authenticated account per fixed UTC minute, checked before reading/decoding photo bodies. Existing auth, same-origin, format, size and pixel limits remain in force. This does not identify a person across multiple Google accounts and is not an IP-level/WAF limit.
-
-The emergency database pause is `update public.forma_generation_control set paused=true where id=true;` in Supabase SQL Editor. Only an operator may change control values. Resume with `paused=false` after inspecting provider usage, storage and unresolved requests. Do not manually mark an uncertain request failed until confirming its upstream/storage outcome; doing so could release reserved storage too early. Confirmed technical failures on eligible new requests restore the account credit once; uncertain attempts stay held. Site daily usage is never decremented, including after an account-credit restoration. Database RPC availability/permission errors block OpenAI calls.
-
-Every POST now requires a UUID `Idempotency-Key`. An accepted request records owner, style and a SHA-256 fingerprint of the five original inputs. Reusing an ID with different inputs conflicts. Matching replays return only the existing watermarked preview, the existing failure, or an in-progress/uncertain status; they never debit or call OpenAI again. Successful generation uploads private JPEG objects and commits portrait ownership, request success and lease release together. If the commit response is lost, persistence checks for the committed portrait before attempting object cleanup. Unknown commit outcomes retain objects for recovery rather than deleting a possibly committed original.
-
-`GET /api/generation-requests/:id` verifies the account and returns `{request:{id,status,portraitId,attemptRestored}}` with no-store headers. Statuses are `running`, `succeeded`, `failed`, `uncertain`. Expired running leases read as uncertain; deleted portraits keep their request tombstone with `portraitId:null`, so deletion cannot make an old request reusable. Requests contain no public image URLs. The browser stores only its pending request UUID in per-account sessionStorage. After a disconnect/reload it checks status without resending photos or debiting again, and can load the saved portrait. An uncertain outcome requires an explicit acknowledgement before a new attempt; the backend limits still apply. Closing the browser does not intentionally abort an accepted upstream call; saving continues while the server remains alive. Input files remain memory-only.
-
-Busy/site-cap/storage/rate rejections do not consume account attempts. Stable rejection codes include `generation_busy`, `site_generation_limit`, `generation_storage_limit`, `generation_rate_limited`, `human_verification_failed`, `generation_allowance_exhausted`, `request_conflict`. Accepted failures use `generation_failed` or `generation_uncertain`; clients must not automatically retry uncertain upstream work.
-
-Validation: `npm test` and `npm run build`; `python scripts/test-generation-db.py <fresh-disposable-postgres-container>` exercises the full migration chain, concurrent debits, duplicate IDs/tokens, daily caps after payment, lease expiry, storage budget, publish rollback and private-role permissions. CI runs this against an isolated Postgres 17 service. Neither these checks nor readiness consumes real OpenAI credits or creates payments.
-
-References: https://developers.cloudflare.com/turnstile/get-started/server-side-validation/ and https://developers.cloudflare.com/turnstile/get-started/client-side-rendering/ . This rollout does not enable public generation, activate Stripe Live, provide a job queue, or finish the remaining monitoring/backups/support launch steps.
-
-## Switching image providers
-
-`IMAGE_PROVIDER=openai` (the default) uses `OPENAI_API_KEY` and `OPENAI_IMAGE_MODEL` (default `gpt-image-2`). Set `IMAGE_PROVIDER=openrouter` to use only `OPENROUTER_API_KEY` and `OPENROUTER_IMAGE_MODEL` (default `openai/gpt-image-2`). These are server-only variables: never use a `NEXT_PUBLIC_` prefix. Save the settings and restart locally, or redeploy the Render service. No migration is required. Existing portraits and pending request recovery remain independent of the selected provider. Invalid provider names and missing selected-provider credentials fail before allowance reservation; an unused provider's key is not required.
-
-OpenRouter uses `POST https://openrouter.ai/api/v1/images` with five normalized JPEG data-URL `input_references` and one output. Supported `OPENROUTER_IMAGE_MODEL` values:
-
-| Model | Environment value | Requested output |
-| --- | --- | --- |
-| GPT Image 2 (default) | `openai/gpt-image-2` | 1024x1536, medium, JPEG |
-| Qwen Image 2.1 Turbo | `qwen/qwen-image-2.1-turbo` | 1K, 2:3 portrait |
-| Seedream 5.0 Flash | `bytedance-seed/seedream-5-0-flash` | 1K, 2:3 portrait, JPEG |
-| Seedream 5.5 | `bytedance-seed/seedream-5-5` | 1K, 2:3 portrait, JPEG |
-| Google Nano Banana 2.1 | `google/gemini-nano-banana-2.1` | 1K, 2:3 portrait |
-
-The four alternative models use `resolution` and `aspect_ratio`, without OpenAI-specific `size` or `quality`. Qwen/Google omit `output_format` because it is not advertised in their capability catalog; returned raster images are converted to JPEG. 1K is a provider resolution tier, not a guarantee of exactly 1024x1536. Unknown model IDs fail before allowance reservation and fail readiness when generation is enabled. Other models, including Qwen Pro, need an explicit capability profile before use. Model availability, price, reference identity fidelity and privacy-compatible endpoint availability vary; these have not been validated with paid generations.
-
-For example, set `IMAGE_PROVIDER=openrouter`, `OPENROUTER_API_KEY=<server-only key>` and `OPENROUTER_IMAGE_MODEL=qwen/qwen-image-2.1-turbo`, then restart/redeploy. Switch only the model ID to select another supported model. No database migration or frontend rebuild-specific variable is needed. Output raster images are validated and converted to JPEG before private storage/watermarking. Remote output URLs are not fetched. Responses are bounded to 30 MiB and decoded output to 40 megapixels / 20 MiB JPEG.
-
-There is no automatic cross-provider failover or request retry. OpenRouter endpoint fallback is disabled and `data_collection: deny` excludes endpoints that train on inputs (it does not guarantee zero retention). Uploaded references are sent to OpenRouter and its selected upstream model provider when enabled. Review their policies before allowing customer uploads. The UI consent mentions both available processing routes. Account/site allowances, CAPTCHA, leases, idempotency, failure restoration, gallery, payments and watermarks apply identically to both providers. Provider errors do not expose raw responses or keys; unknown outcomes retain the existing recovery protections. Confirmed technical non-delivery restores the account attempt once; unknown outcomes stay held until resolved.
-
-Keep generation and checkout closed during configuration changes. Readiness checks selected-provider configuration only, not key validity, credit balance or model availability. Verify with mocked tests first, then one deliberate paid generation. Do not automatically rerun an uncertain attempt with the other provider.
-
-Reference: [OpenRouter Image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation).
-
-### Public origin behind a reverse proxy
-
-Generation, checkout, credit redemption and deletion share the same origin verifier. It uses server-only `APP_ORIGIN` when set, otherwise Render's automatic `RENDER_EXTERNAL_URL`, then HTTPS plus `RENDER_EXTERNAL_HOSTNAME`. This accepts the real browser HTTPS origin even when Next.js sees an internal HTTP/localhost request URL. Checkout success/cancel URLs use that trusted public origin as well. Other origins and `Sec-Fetch-Site: cross-site` remain rejected; Host and forwarded headers never expand the allowlist. Custom-domain deployments must set `APP_ORIGIN=https://your-domain` (no credentials, path, query or fragment). Invalid configured origins fail closed and fail readiness. Local development without these variables preserves localhost/127.0.0.1 port 5173 compatibility. Source: https://render.com/docs/environment-variables .
-
-
-## Stripe Live preparation — not an activation
-
-Apply `supabase/migrations/20261119_stripe_modes.sql` **after all previous migrations**, with the app, generation, checkout and payment reconciliation/webhooks stopped. Deploy the matching application before resuming. The migration leaves `forma_billing_control.mode=test`, preserves all balances/photos, and does not activate Live or reset accounts. New mutation RPCs check a caller-supplied payment mode inside the transaction; legacy unguarded RPC access is revoked for the backend role. Old versions must not run against this schema.
-
-`STRIPE_MODE` is server-only, defaults to `test`, and accepts only exact `test` or `live`. Secret/restricted key prefixes, returned Price/session `livemode`, webhook event mode, persisted checkout mode and database mode must agree. Unknown modes and mismatches fail closed before creating checkout or consuming generation/unlock credits. Readiness also verifies database/application mode agreement using a read-only table request. Existing paid originals remain downloadable in either mode. The frontend balance response includes `mode`; test checkout explicitly says no real charges and Live checkout says real charges. No public Stripe key is needed for hosted Checkout.
-
-Before any real launch, activate the Stripe business account in the Dashboard, review account requirements, create **Live** one-time CAD Prices of 399 cents and 549 cents, and create a **Live snapshot webhook destination** at `https://forma-production.onrender.com/api/stripe/webhook` for `checkout.session.completed` and `checkout.session.async_payment_succeeded`. API keys, Prices and signing secrets belong to their own account/mode/sandbox. A CLI signing secret cannot replace the Live destination's signing secret. Use a restricted server key with the permissions required for Prices and Checkout Sessions if available. Never paste keys into chat or commit them.
-
-### Deferred, explicit Live cutover
-
-Do not execute this as part of a normal migration, CI or deploy. Obtain explicit confirmation to activate real payments first. While the app and payment processing are stopped, drain/check outstanding generation and test payments, back up the database and verify the new release is ready. Only the database operator can call `public.forma_activate_live(text)`; browser and backend roles have no execution permission. After applying `20261119_stripe_modes_preserve_credits.sql`, its exact confirmation argument is `ACTIVATE LIVE AND PRESERVE EXISTING CREDITS`. The previous reset confirmation is rejected.
-
-That single transaction changes database billing mode to Live, **preserves all existing generation and unlock balances as gifted credits**, expires pending test package orders and clears unpaid test checkout reservations. It does not insert or update balance records, including accounts at zero or accounts that have not loaded their initial allowance. Photos, already-unlocked originals and paid test history are preserved. Old test payment notifications cannot restore test credits after cutover. Only one concurrent activation succeeds; later calls return false without changing balances. In-flight generation leases block activation; a failure rolls the entire transition back. New registrations and previously unused accounts retain the existing **3 generation attempts / 0 unlock credits** offer on first use. The operator transition is one-way: do not flip database mode back to test on the shared production database.
-
-Configure Render `STRIPE_MODE=live` with the matching Live `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_PACKAGE_PRICE_ID` and `STRIPE_WEBHOOK_SECRET`. Keep `GENERATION_ENABLED=false` and `CHECKOUT_ENABLED=false` while deploying and checking readiness. After verifying mode, account readiness and remaining support/privacy requirements, explicitly enable checkout and perform one deliberate real payment (not a test card), then verify one-time fulfillment. No hosted activation, balance changes or real payments are performed by this code change or its isolated tests. Use a separate app/database for future sandbox testing. Full automated checks: `python scripts/test-stripe-modes-db.py <fresh-disposable-postgres-container>`; CI runs this with synthetic events only.
-
-References: [Stripe keys](https://docs.stripe.com/keys), [webhook setup](https://docs.stripe.com/webhooks), [fulfillment](https://docs.stripe.com/checkout/fulfillment).
-
-
-## CAD checkout pricing
-
-Current new checkout prices are **CA$3.99 CAD** for one original and **CA$5.49 CAD** for 5 generation attempts plus 2 unlock credits, in both test and Live mode. The amounts remain 399 and 549 minor units; this is a new CAD price decision, not an exchange-rate conversion of historical payments. UI labels and server Stripe Price validation use CAD. Set the two environment Price IDs to CAD Prices in the selected Stripe mode. A USD Price is rejected for a new purchase. Existing Live CAD Prices may be used; create CAD sandbox Prices before testing checkout again.
-
-After the Stripe-mode migration, stop app/payment processing, apply `supabase/migrations/20261119_stripe_modes_cad.sql`, then deploy matching code. This migration does not activate Live, reset balances, convert existing records, or change Stripe products. It widens the package currency constraint to preserve USD history while new reservations use a dedicated CAD RPC. Previous reservation entrypoint access is revoked for the service role. New readiness requires that CAD RPC. Do not run the old app after applying it.
-
-Already-paid USD portraits and packages retain their original currency and access rights. Verified historical USD payments can still be fulfilled once against their saved currency/amount/session/mode snapshots. Open obsolete USD checkout sessions must be reconciled/expired before a new CAD checkout; never silently return a USD checkout under a CAD-labelled button. A legacy package reservation without a known session requires operator reconciliation rather than discarding potentially paid work. The one-time Live activation remains separate. Apply the subsequent preserve-credits migration before activation; the current policy keeps all existing balances unchanged.
-
-Database validation: `python scripts/test-cad-db.py <fresh-disposable-postgres-container>` includes the full historical migration chain, operator activation checks, CAD reservation, USD history, mixed-currency rejection and payment replay. No hosted data or real payments are used.
-
-
-## Live cutover with existing credits preserved (current policy)
-
-Apply `supabase/migrations/20261119_stripe_modes_preserve_credits.sql` after the mode and CAD migrations, with service/payment processing paused. This **only replaces the operator activation function**; applying it does not activate Live, change balances, close sessions or perform a payment. Historical migrations remain unchanged. The old 2/0-reset activation confirmation must not be used; the replacement rejects it.
-
-When the operator later explicitly activates Live using the confirmation `ACTIVATE LIVE AND PRESERVE EXISTING CREDITS`, existing generation/unlock balances are retained as gifts, paid originals/photos remain accessible, pending test package orders are expired and unpaid test checkout reservations are cleared. The activation records `reset_generations=null` because no reset occurs. It is still one-way, operator-only, once-only, transactional, and blocked by an active generation lease. Delayed test webhooks remain rejected by mode-checked fulfillment RPCs and cannot restore test credits. Users with no existing allowance row still receive the normal 3/0 on first use. Previously completed resets are not undone by applying this migration or repeating activation.
-
-The app must remain stopped while switching Render credentials/mode and activating database mode. Keep generation and checkout flags false until checks pass; no code or migration automatically executes the activation. No Stripe key change is needed for this preserve-credit policy itself. Full isolated validation (including historical policies, CAD pricing and current behavior): `python scripts/test-preserve-credits-db.py <fresh-disposable-postgres-container>`; CI runs this chain. Never copy the test script's fixture-only mode reversal to a hosted database.
-
-
-## Public contact and policy pages
-
-Public English routes (no login required): `/contact`, `/privacy`, `/terms`. The shared site footer links all three on Create, Gallery and policy pages. Purchase disclosures link the policies before checkout, and the generation consent identifies adult/self-photo use, AI processing and the delivered-portrait/technical-failure credit rules. These notices do not add a new backend age-verification service, automatic account deletion or a versioned legal-consent audit log.
-
-`src/legal-config.ts` contains the operator's explicitly supplied public details: Zephyr Wong, Ontario, Canada, support/privacy email from `SUPPORT_EMAIL` (default `forma.portraits@gmail.com`), policy date November 19, 2026. Update the policy date/content when practices change. Prices are imported from the shared CAD price definitions. Reference uploads are processed in application memory, generated portraits remain in private Gallery storage, and third-party logging/retention is not described as zero retention. The policy lists Google/Supabase, Render, Cloudflare Turnstile, Stripe, OpenAI and OpenRouter/upstream AI providers. The support email is a mailto link; this change does not send any messages or install an inbox integration.
-
-Privacy/account requests are also manual. Verify account control using proportionate information; do not request card numbers, passwords, API keys or unnecessary identity documents/photos. Explain what information is retained and why, handle individual photo removal using the supported deletion flow, and review dependent account/payment/security records before closing an account. Gallery deletion is not an immediate erasure of provider backups, Stripe records or all generation metadata. Set an operator review schedule so records no longer needed for service, legitimate security/dispute handling or legal obligations are removed appropriately. No retention/deletion automation is added here.
-
-After publishing, configure Stripe **Live public business details** with the support email and website URLs:
-- Support: `https://forma-production.onrender.com/contact`
-- Privacy: `https://forma-production.onrender.com/privacy`
-- Terms: `https://forma-production.onrender.com/terms`
-
-Verify the mailbox is monitored, the pages are publicly reachable, the business details/required receipts are correct, and the Stripe public policy links appear in checkout before enabling paid use. This change does not require a new Stripe API permission and does not turn on Stripe's mandatory terms checkbox. If enabling `consent_collection.terms_of_service=required` later, configure the business terms URL first and design a versioned acceptance record rather than claiming an unrecorded checkbox is audited. A local test/build cannot certify legal compliance: the operator should review these business-specific drafts with qualified Ontario legal/privacy advice and keep them aligned with actual operations and applicable customer rights.
-
-Sources consulted for drafting: [OPC fair information principles](https://www.priv.gc.ca/en/privacy-topics/privacy-laws-in-canada/the-personal-information-protection-and-electronic-documents-act-pipeda/p_principle/), [OPC meaningful consent guidance](https://www.priv.gc.ca/en/privacy-topics/collecting-personal-information/consent/gl_omc_201805/), [Stripe policy presentation](https://docs.stripe.com/payments/checkout/custom-components?ui=full-page). All policy promises require ongoing operator follow-through; no external Dashboard settings are changed by this implementation.
-
-### Stripe promotion codes
-
-New portrait and credit-package Checkout Sessions allow customers to enter Stripe promotion codes. Prices remain CA$3.99 and CA$5.49 CAD before eligible discounts. Percentage and fixed discounts, including 100% off, change the checkout total without changing the package contents. No account or coupon identifier is hardcoded in the application.
-
-Before deploying this version, stop the app and payment/webhook processing, back up the database, then apply `supabase/migrations/20261119_stripe_promotions.sql` after the existing migrations. Deploy the matching application before resuming processing. Disabling checkout alone does not pause webhook fulfillment. The migration preserves balances and existing checkout parameters; existing reservations do not gain promotion-code entry until they expire and a new reservation is created. Do not manually change a pending reservation's flag or reuse its idempotency key with different parameters.
-
-In the Stripe Dashboard, select the correct Live or sandbox account, create a coupon under the product catalogue, then create a customer-facing promotion code for it. Configure eligible products, expiry and redemption limits in Stripe. For a free validation order, use a limited-redemption 100% coupon covering the product you intend to test. Enter the code on the hosted checkout page and verify its final total before completing. The application does not create codes or enable Live checkout automatically. Customer-restricted codes require Stripe customer identification; Google sign-in alone does not establish that association.
-
-The server retrieves the completed Session with expanded line items and verifies ownership, mode, quantity, saved Price ID, original subtotal, currency, applied discount references and total arithmetic. A zero-total order requires a verified full discount and a completed, settled Session; no PaymentIntent is required. Stripe validates code eligibility when applied. Later code expiry does not invalidate an already completed order. Checkout Sessions Write and Prices Read remain the required restricted-key permissions; no separate coupon lookup is used.
-
-The private `forma_checkout_receipts` table records original subtotal, discount, tax, inclusive tax component, actual total, discount references and payment status. Fulfillment and receipt insertion are one transaction, with replay protection. This supports free orders without treating a browser success URL as proof of payment. A free order verifies fulfillment, not real card charging, and does not establish tax treatment. This feature does not enable automatic tax.
-
-Run `python scripts/test-promotions-db.py <disposable-postgres-container>` against a fresh database named `forma_test` to check the full migration chain, concurrent fulfillment, rollback and permissions. Never run the test scripts against hosted production.
-
-
-### New-account welcome
-
-Apply `supabase/migrations/20261119_new_account_welcome.sql` before deploying this UI. A private, service-only table records welcome eligibility for accounts created after this migration; existing accounts are not enrolled. The auth insert trigger only records onboarding state and never grants or resets credits. New users signing in from My Gallery return to the home page. The accessible welcome dialog introduces the existing 3 free attempts, five-photo requirement, watermarked Gallery and optional original unlocks. Closing or continuing acknowledges it on the server, so it stays dismissed across browsers and later logins. It cannot be dismissed successfully until acknowledgement saves; network errors offer retry. Missing welcome configuration does not block the main app. No uploaded photos, auth tokens or welcome decisions are stored in browser local storage.
-
-
-### Two credit packages
-
-New purchases offer Starter at CA$4.49 CAD (3 generation attempts + 1 original unlock) and Plus at CA$5.49 CAD (5 attempts + 2 unlocks). Both are repeatable one-time purchases; balances accumulate. Single-photo unlocks remain CA$3.99 CAD.
-
-Pause the app and payment processing, then apply `supabase/migrations/20261119_credit_package_options.sql` AFTER all previous migrations, including welcome and promotions. Deploy the matching application before resuming. It preserves existing balances, USD/CAD orders, Stripe session/idempotency parameters and discount receipts. Existing orders are backfilled as Plus (5+2) without replaying payments. New orders store their package code and credit quantities; transactional fulfillment grants that saved snapshot exactly once. Each account may have one pending checkout per package, so choosing Starter never silently reuses a Plus checkout. The old reservation RPC is no longer executable by the backend role.
-
-Create a separate one-time Stripe Price of 449 cents in CAD and set server-only `STRIPE_STARTER_PACKAGE_PRICE_ID` in the matching sandbox/local or Live/Render environment. Keep `STRIPE_PACKAGE_PRICE_ID` for the existing 549-cent Plus price. No new webhook endpoint or key permissions are required. Check any product-specific promotion code restrictions if you create a separate Stripe Product. Missing Starter configuration fails that checkout without disabling Plus. The browser sends only a package code; submitted price amounts or credit counts do not control fulfillment. Payment return messages report package credits without assuming every package contains 5+2.
-
-Full isolated database validation: `python scripts/test-package-options-db.py <fresh-disposable-postgres-container>`; do not run it against hosted databases.
-
-
-### Restore generation credits for confirmed technical failures
-
-Pause generation and deploy together with `supabase/migrations/20261119_restore_failed_generation.sql` after all existing migrations. The new private `forma_finish_generation_restoring` RPC locks billing control, global generation control, account allowance and the request in that order. It marks confirmed failure and adds back one attempt in the same transaction, recording `restored_at`. Repeated completion calls, concurrent payment grants, and late publication cannot restore twice or both deliver and restore. No unlock credits or site daily limits are restored. The migration does not retrospectively reimburse historical requests, and does not reset account balances. All new accepted attempts, free or purchased, use the same restoration rule.
-
-Explicit provider rejection/error responses, invalid image output, processing failures, storage upload failures and confirmed PostgreSQL publication rollback qualify when no portrait was delivered. Unknown provider timeouts/connections or a lost publication response remain `uncertain`; they do not automatically restore after the lease expires. A recovered committed portrait remains charged. Successful portraits remain charged despite dissatisfaction, later deletion or repeated status checks. Validation failures still do not debit. HTTP errors/status expose `attemptRestored` only after database confirmation, and the UI refreshes the balance.
-
-For an uncertain request, first investigate provider outcome and private publication/storage records. Only after confirming terminal non-delivery, the backend/operator may call `forma_finish_generation_restoring(owner_uuid, request_uuid, false)` to resolve it and restore once. If publication succeeds first, the RPC returns `succeeded` and does not restore. Never mark a request failed just because its lease expired or its photo is absent. The status endpoint is read-only and reports restoration state. Preserve image objects after an unknown publication result; unreferenced private objects from a genuinely failed upload may require operator cleanup and continue to count toward capacity until removed.
-
-CI runs `python scripts/test-generation-restoration-db.py <fresh-disposable-postgres-container>` for the full historical migration chain and current restoration transaction/race tests. Never run these fixture scripts against hosted databases. Restoring an internal generation credit does not initiate a Stripe transaction.
-
-Public support email: set `SUPPORT_EMAIL=forma.portraits@gmail.com` in Render Environment or a local `.env` file. Contact, Privacy Policy, Terms and their mailto links share this value. Blank/unset values use the default address. This is read by server-rendered policy pages, so no `NEXT_PUBLIC_` prefix is needed. The pages are statically generated: rebuild/redeploy after changing the value; restart the development server locally. This does not update Stripe customer-facing support details, which must be maintained separately in Stripe Dashboard.
+References: [Supabase Storage](https://supabase.com/docs/guides/storage/buckets/fundamentals), [OpenAI image generation](https://developers.openai.com/api/docs/guides/image-generation), [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data), [Render custom domains](https://render.com/docs/custom-domains), [Turnstile errors](https://developers.cloudflare.com/turnstile/troubleshooting/client-side-errors/error-codes/).
